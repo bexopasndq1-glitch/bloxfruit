@@ -14,9 +14,10 @@ local player = Players.LocalPlayer
 
 -- ===== Настройки =====
 local FLY_SPEED = 250        -- скорость полёта (студов/сек), меньше = безопаснее
-local FARM_HEIGHT = 9        -- высота зависания над мобом
+local FARM_HEIGHT = 4        -- высота зависания над мобом (ближе = удары достают)
 local FARM_APPROACH = 80     -- дальше этого расстояния сначала подлетаем
 local LEVEL_WINDOW = 100     -- фармим мобов с уровнем от (мой - окно) до (мой)
+local FAST_RANGE = 60        -- радиус, в котором fast attack бьёт мобов
 local WEAPONS = {"Melee", "Sword", "Blox Fruit"}
 local FRUIT_KEYS = {Enum.KeyCode.Z, Enum.KeyCode.X, Enum.KeyCode.C, Enum.KeyCode.V}
 -- =====================
@@ -181,6 +182,62 @@ task.spawn(function()
             VirtualUser:Button1Up(Vector2.new(1280, 672))
         end
         task.wait(0.1)
+    end
+end)
+
+-- ================= Fast Attack через сеть (из найденного скрипта) =================
+-- Зависит от версии игры: если ремоутов нет, остаётся только клик-цикл выше.
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RegisterAttack, RegisterHit
+local netWarned = false
+
+local function findNet()
+    if RegisterAttack and RegisterHit then return end
+    local mods = ReplicatedStorage:FindFirstChild("Modules")
+    local net = mods and mods:FindFirstChild("Net")
+    if net then
+        RegisterAttack = net:FindFirstChild("RE/RegisterAttack")
+        RegisterHit = net:FindFirstChild("RE/RegisterHit")
+    end
+end
+
+local function netAttack()
+    local root = getRoot()
+    local folder = Workspace:FindFirstChild("Enemies")
+    if not root or not folder then return end
+
+    findNet()
+    if not (RegisterAttack and RegisterHit) then
+        if not netWarned then
+            netWarned = true
+            notify("Ремоуты fast attack не найдены, работает только клик")
+        end
+        return
+    end
+
+    local list = {}
+    for _, e in ipairs(folder:GetChildren()) do
+        local hum = e:FindFirstChildOfClass("Humanoid")
+        local er = e:FindFirstChild("HumanoidRootPart")
+        if hum and er and hum.Health > 0
+            and (er.Position - root.Position).Magnitude <= FAST_RANGE then
+            list[#list + 1] = {e, er}
+        end
+    end
+    if #list == 0 then return end
+
+    local first = list[1][1]:FindFirstChild("Head") or list[1][2]
+    RegisterAttack:FireServer(0.1)
+    RegisterHit:FireServer(first, list)
+end
+
+-- Работает при включённом Fast Attack и всегда во время автофарма
+task.spawn(function()
+    while alive do
+        if state.fastAttack or state.autoFarm then
+            pcall(netAttack)
+        end
+        task.wait(0.05)
     end
 end)
 
