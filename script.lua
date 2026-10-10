@@ -1,4 +1,4 @@
--- VitaHub | Blox Fruits (v4) (запускать через executor)
+-- VitaHub | Blox Fruits (v4.1) (запускать через executor)
 -- F2 ESP фруктов | F3 полёт к фрукту
 -- F4 автофарм по уровню | F5 смена оружия | F6 fast attack | RightShift скрыть/показать GUI
 
@@ -17,8 +17,14 @@ local FLY_SPEED = 250        -- скорость полёта (студов/се
 local FARM_HEIGHT = 10       -- высота зависания над мобом (выше = безопаснее, но клики достают хуже)
 local FARM_APPROACH = 80     -- дальше этого расстояния сначала подлетаем
 local FAST_RANGE = 60        -- радиус, в котором fast attack бьёт мобов
+local MOB_LEVEL_SLACK = 5    -- насколько уровень моба может быть выше моего
 local WEAPONS = {"Melee", "Sword", "Blox Fruit"}
 local FRUIT_KEYS = {Enum.KeyCode.Z, Enum.KeyCode.X, Enum.KeyCode.C, Enum.KeyCode.V}
+
+-- Ручной выбор квеста (если авто-выбор ошибается). Пример:
+-- local FORCE_QUEST = {name = "ZombieQuest", idx = 2}
+-- Имя и номер смотри в консоли executor: скрипт печатает их при выборе квеста.
+local FORCE_QUEST = nil
 -- =====================
 
 local alive = true           -- false после "Убить GUI": все циклы завершаются
@@ -32,6 +38,13 @@ local farmMobName = nil  -- имя моба текущего квеста (fast 
 local function baseName(n)
     return (n:gsub("%s*%[.-%]%s*$", ""))
 end
+
+-- нормализованное имя для "мягкого" сравнения: "Snow Trooper" == "SnowTrooper2"
+local function normName(s)
+    s = baseName(s):lower():gsub("[^%w]", "")
+    return (s:gsub("%d+$", ""))
+end
+
 local flying = false
 local currentTween
 local noclipConn
@@ -48,7 +61,7 @@ local refreshGui = function() end
 local function notify(text)
     pcall(function()
         game:GetService("StarterGui"):SetCore("SendNotification", {
-            Title = "VitaHub test", Text = text, Duration = 3,
+            Title = "VitaHub", Text = text, Duration = 3,
         })
     end)
 end
@@ -353,58 +366,220 @@ local function loadQuests()
     return QuestData
 end
 
+-- Споуны моба. Порядок поиска:
+-- 1) точное совпадение имени, 2) "мягкое" совпадение (пробелы/регистр/цифры),
+-- 3) запасной вариант: позиции уже загруженных мобов с таким именем.
 local function getSpawnPositions(mob)
     local list = {}
     local origin = Workspace:FindFirstChild("_WorldOrigin")
     local folder = origin and origin:FindFirstChild("EnemySpawns")
+
     if folder then
         for _, p in ipairs(folder:GetChildren()) do
             if p:IsA("BasePart") and baseName(p.Name) == mob then
                 list[#list + 1] = p.Position
             end
         end
+
+        if #list == 0 then
+            local want = normName(mob)
+            for _, p in ipairs(folder:GetChildren()) do
+                if p:IsA("BasePart") and normName(p.Name) == want then
+                    list[#list + 1] = p.Position
+                end
+            end
+        end
     end
+
+    if #list == 0 then
+        local enemies = Workspace:FindFirstChild("Enemies")
+        if enemies then
+            for _, e in ipairs(enemies:GetChildren()) do
+                local er = e:FindFirstChild("HumanoidRootPart")
+                if er and baseName(e.Name) == mob then
+                    list[#list + 1] = er.Position
+                end
+            end
+        end
+    end
+
     return list
 end
 
+-- Уровень моба из имени вида "Vampire [Lv. 975]"
+local function getMobLevel(mob)
+    local hum = mob:FindFirstChildOfClass("Humanoid")
+    local str = (hum and hum.DisplayName or "") .. " " .. mob.Name
+    local lv = str:match("%[Lv%.%s*(%d+)%]")
+    return lv and tonumber(lv) or nil
+end
+
+-- Моб подходит, если его уровень не сильно выше моего (или уровень не определился)
+local function mobLevelOk(mob)
+    local ml = getMobLevel(mob)
+    return not ml or ml <= getPlayerLevel() + MOB_LEVEL_SLACK
+end
+
+-- Уровень уже загруженных мобов с таким именем (nil, если их нет рядом)
+local function liveMobLevel(mobName)
+    local folder = Workspace:FindFirstChild("Enemies")
+    if not folder then return nil end
+    for _, mob in ipairs(folder:GetChildren()) do
+        if baseName(mob.Name) == mobName then
+            local ml = getMobLevel(mob)
+            if ml then return ml end
+        end
+    end
+    return nil
+end
+
+-- Почему квест нельзя взять (nil = можно)
+local function skipReason(c, lvl)
+    if #getSpawnPositions(c.mob) == 0 then
+        return "нет споунов моба " .. c.mob
+    end
+    local ml = liveMobLevel(c.mob)
+    if ml and ml > lvl + MOB_LEVEL_SLACK then
+        return ("моб %s слишком сильный (Lv. %d)"):format(c.mob, ml)
+    end
+    return nil
+end
+
+local warnedSkips = {}
+
 -- Квест с самым высоким требованием, которое не выше моего уровня,
 -- и только такой, чьи мобы реально есть в текущем море.
+-- Если самый подходящий по уровню квест пропущен, пишет причину.
 local function pickQuest()
     local quests = loadQuests()
     if not quests then return nil end
 
     local lvl = getPlayerLevel()
-    local best
 
+    -- ручной выбор
+    if FORCE_QUEST then
+        local tier = quests[FORCE_QUEST.name] and quests[FORCE_QUEST.name][FORCE_QUEST.idx]
+        if type(tier) == "table" and type(tier.Task) == "table" then
+            local mob, cnt
+            for m, c in pairs(tier.Task) do mob, cnt = m, c end
+            if mob then
+                return { name = FORCE_QUEST.name, idx = FORCE_QUEST.idx, mob = mob,
+                         count = type(cnt) == "number" and cnt or 1, req = tier.LevelReq or 0 }
+            end
+        end
+    end
+
+    -- все квесты, доступные по уровню (боссов с задачей "убить 1" пропускаем)
+    local cands = {}
     for qName, tiers in pairs(quests) do
         if type(tiers) == "table" then
             for idx, data in pairs(tiers) do
                 if type(data) == "table"
                     and type(data.LevelReq) == "number"
                     and type(data.Task) == "table"
-                    and data.LevelReq <= lvl
-                    and (not best or data.LevelReq > best.req) then
+                    and data.LevelReq <= lvl then
 
                     local mob, cnt
                     for m, c in pairs(data.Task) do
                         mob, cnt = m, c
                     end
-
-                    -- cnt > 1: пропускаем боссов
-                    if mob and type(cnt) == "number" and cnt > 1 and #getSpawnPositions(mob) > 0 then
-                        best = { name = qName, idx = idx, mob = mob, count = cnt, req = data.LevelReq }
+                    if mob and type(cnt) == "number" and cnt > 1 then
+                        cands[#cands + 1] = { name = qName, idx = idx, mob = mob, count = cnt, req = data.LevelReq }
                     end
                 end
             end
         end
     end
 
-    return best
+    -- сначала самые высокие по требованию
+    table.sort(cands, function(a, b)
+        if a.req ~= b.req then return a.req > b.req end
+        return tostring(a.name) .. ":" .. tostring(a.idx) < tostring(b.name) .. ":" .. tostring(b.idx)
+    end)
+
+    local skipped = {}
+    for _, c in ipairs(cands) do
+        local why = skipReason(c, lvl)
+        if not why then
+            -- объясняем, почему не взяли квест повыше
+            local top = skipped[1]
+            if top and lvl - c.req >= 25 then
+                local key = tostring(top.name) .. ":" .. tostring(top.idx)
+                if not warnedSkips[key] then
+                    warnedSkips[key] = true
+                    notify(("Пропущен квест %s (Lv %d): %s"):format(tostring(top.name), top.req, top.why))
+                end
+            end
+            for i = 1, math.min(3, #skipped) do
+                print(("[VitaHub] пропущен %s:%s (req %d) - %s"):format(
+                    tostring(skipped[i].name), tostring(skipped[i].idx), skipped[i].req, skipped[i].why))
+            end
+            return c
+        end
+        c.why = why
+        skipped[#skipped + 1] = c
+    end
+
+    return nil
 end
 
 local function questActive()
     local ok, vis = pcall(function() return player.PlayerGui.Main.Quest.Visible end)
     return ok and vis == true
+end
+
+-- Упоминается ли моб в тексте активного квеста.
+-- true / false, а если прочитать текст квеста не удалось - nil.
+local function questMentionsMob(mob)
+    local ok, qgui = pcall(function() return player.PlayerGui.Main.Quest end)
+    if not ok or not qgui then return nil end
+
+    local want = mob:lower()
+    local stem = want:gsub("y$", "") -- Spy -> Spies
+    local sawText = false
+
+    for _, d in ipairs(qgui:GetDescendants()) do
+        if d:IsA("TextLabel") and d.Text ~= "" then
+            sawText = true
+            local txt = d.Text:lower()
+            if txt:find(want, 1, true) or txt:find(stem, 1, true) then
+                return true
+            end
+        end
+    end
+    return sawText and false or nil
+end
+
+-- Гарантирует, что активен ИМЕННО нужный квест:
+-- старый/чужой квест отменяется, потом берётся нужный.
+local function ensureQuest(q, abort)
+    local comm = getCommF()
+    if not comm then return false end
+
+    if questActive() then
+        if questMentionsMob(q.mob) == true then
+            return true -- уже нужный квест
+        end
+
+        -- висит квест с прошлого раза -> отменяем
+        for _ = 1, 3 do
+            if abort() then return false end
+            pcall(function() comm:InvokeServer("AbandonQuest") end)
+            task.wait(0.6)
+            if not questActive() then break end
+        end
+        if questActive() then
+            notify("Не удалось отменить старый квест, проверь вручную")
+        end
+    end
+
+    for _ = 1, 3 do
+        if abort() then return false end
+        pcall(function() comm:InvokeServer("StartQuest", q.name, q.idx) end)
+        task.wait(0.8)
+        if questActive() then return true end
+    end
+    return false
 end
 
 -- Ближайший живой моб ИМЕННО из квеста
@@ -417,7 +592,7 @@ local function getNearestQuestMob(mobName)
     for _, mob in ipairs(folder:GetChildren()) do
         local hum = mob:FindFirstChildOfClass("Humanoid")
         local mroot = mob:FindFirstChild("HumanoidRootPart")
-        if hum and mroot and hum.Health > 0 and baseName(mob.Name) == mobName then
+        if hum and mroot and hum.Health > 0 and baseName(mob.Name) == mobName and mobLevelOk(mob) then
             local d = (mroot.Position - root.Position).Magnitude
             if d < bestDist then best, bestDist = mob, d end
         end
@@ -431,7 +606,8 @@ local function attackMob(mob, q, abort)
     local hum = mob:FindFirstChildOfClass("Humanoid")
     if not mroot or not hum then return end
 
-    statusText = ("%s | %s x%d | lvl %d"):format(mob.Name, q.name, q.count, getPlayerLevel())
+    statusText = ("%s | игрок %d | моб %s | %s x%d"):format(
+        q.mob, getPlayerLevel(), tostring(getMobLevel(mob) or "?"), q.name, q.count)
 
     local r = getRoot()
     if r and (mroot.Position - r.Position).Magnitude > FARM_APPROACH then
@@ -463,6 +639,7 @@ local function farmCycle()
     local function on() return alive and state.autoFarm end
     local abort = function() return not on() end
 
+    -- каждый цикл заново выбираем квест по ТЕКУЩЕМУ уровню (без кэша)
     local q = pickQuest()
     if not q then
         notify("Не нашёл квест под твой уровень, автофарм выключен")
@@ -471,11 +648,14 @@ local function farmCycle()
         return true
     end
     farmMobName = q.mob
+    print(("[VitaHub] квест %s:%s, моб %s x%d, req %d, игрок lvl %d"):format(
+        tostring(q.name), tostring(q.idx), q.mob, q.count, q.req, getPlayerLevel()))
 
     -- ближайший к нам кластер спаунов этого моба
     local root = getRoot()
     if not root then return false end
     local spawns = getSpawnPositions(q.mob)
+    if #spawns == 0 then return false end
     table.sort(spawns, function(a, b)
         return (a - root.Position).Magnitude < (b - root.Position).Magnitude
     end)
@@ -487,19 +667,14 @@ local function farmCycle()
         end
     end
 
-    local function startQuest()
-        local comm = getCommF()
-        if comm then
-            pcall(function() comm:InvokeServer("StartQuest", q.name, q.idx) end)
-        end
+    -- берём квест: старый отменяем, нужный берём
+    statusText = "Беру квест: " .. tostring(q.name)
+    if not ensureQuest(q, abort) then
+        notify("Квест не взялся: " .. tostring(q.name) .. ", бью мобов без него")
     end
-
-    -- берём квест сразу при старте
-    statusText = "Беру квест: " .. q.name
-    startQuest()
-    task.wait(0.6)
     local detect = questActive()  -- работает ли определение статуса квеста
-    notify(("Квест: %s, мобы: %s x%d"):format(q.name, q.mob, q.count))
+    notify(("Квест %s (от lvl %d), мобы %s x%d, игрок lvl %d"):format(
+        tostring(q.name), q.req, q.mob, q.count, getPlayerLevel()))
 
     local kills = 0
     local spIdx, lastSeen = 1, os.clock()
@@ -513,19 +688,19 @@ local function farmCycle()
         if detect then
             if not questActive() and os.clock() - lastTry > 2 then
                 lastTry = os.clock()
-                startQuest()
+                ensureQuest(q, abort)
             end
         elseif kills >= q.count then
             -- статус квеста не определяется: считаем убийства сами
             kills = 0
-            startQuest()
+            ensureQuest(q, abort)
         end
 
         -- раз в 5 сек проверяем, не пора ли сменить квест из-за уровня
         if os.clock() - lastPick > 5 then
             lastPick = os.clock()
             local nq = pickQuest()
-            if nq and (nq.name ~= q.name or nq.idx ~= q.idx) then
+            if nq and nq.req > q.req then
                 return true -- новый цикл возьмёт новый квест
             end
         end
@@ -588,6 +763,9 @@ end
 local function toggleFarm()
     if flying then stopFlying() end
     state.autoFarm = not state.autoFarm
+    if state.autoFarm then
+        warnedSkips = {} -- при каждом включении заново объясняем пропуски квестов
+    end
     refreshGui()
 end
 
@@ -718,7 +896,7 @@ local subLbl = Instance.new("TextLabel")
 subLbl.Position = UDim2.new(0, 0, 0, 28)
 subLbl.Size = UDim2.new(1, 0, 0, 16)
 subLbl.BackgroundTransparency = 1
-subLbl.Text = "Blox Fruits  •  v4"
+subLbl.Text = "Blox Fruits  •  v4.1"
 subLbl.TextColor3 = MUTED
 subLbl.Font = Enum.Font.Gotham
 subLbl.TextSize = 12
