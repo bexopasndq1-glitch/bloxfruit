@@ -48,7 +48,7 @@ local refreshGui = function() end
 local function notify(text)
     pcall(function()
         game:GetService("StarterGui"):SetCore("SendNotification", {
-            Title = "VitaHub", Text = text, Duration = 3,
+            Title = "VitaHub test", Text = text, Duration = 3,
         })
     end)
 end
@@ -247,10 +247,6 @@ task.spawn(function()
 end)
 
 -- ================= Автофарм по квестам =================
--- Если авто-поиск NPC квеста не сработает, впиши позицию вручную:
--- QUEST_NPC_POS["BanditQuest1"] = Vector3.new(x, y, z)
-local QUEST_NPC_POS = {}
-
 local farmNoclip
 local farmTween
 
@@ -411,75 +407,6 @@ local function questActive()
     return ok and vis == true
 end
 
-local function takeQuest(q, center, abort)
-    local function try()
-        local comm = getCommF()
-        if comm then
-            pcall(function() comm:InvokeServer("StartQuest", q.name, q.idx) end)
-        end
-        task.wait(0.6)
-        return questActive()
-    end
-
-    -- 1) пробуем взять сразу
-    if try() then return true end
-
-    -- 2) позиция NPC задана вручную
-    if QUEST_NPC_POS[q.name] then
-        flyToPos(QUEST_NPC_POS[q.name] + Vector3.new(0, 3, 0), abort)
-        if try() then return true end
-    end
-
-    -- 3) ищем именно квестовых NPC (с меткой QUEST / "quest" в имени)
-    local npcs = Workspace:FindFirstChild("NPCs")
-    if not npcs then return false end
-
-    local function isQuestGiver(npc)
-        if npc.Name:lower():find("quest") then return true end
-        for _, d in ipairs(npc:GetDescendants()) do
-            if d:IsA("BillboardGui") and d.Name:lower():find("quest") then return true end
-            if (d:IsA("TextLabel") or d:IsA("TextButton")) and d.Text:upper():find("QUEST") then
-                return true
-            end
-        end
-        return false
-    end
-
-    local marked, all = {}, {}
-    for _, n in ipairs(npcs:GetChildren()) do
-        local p = n:IsA("Model") and (n.PrimaryPart or n:FindFirstChild("HumanoidRootPart"))
-        if p then
-            local item = { npc = n, p = p, d = (p.Position - center).Magnitude }
-            all[#all + 1] = item
-            if isQuestGiver(n) then marked[#marked + 1] = item end
-        end
-    end
-    local byDist = function(a, b) return a.d < b.d end
-    table.sort(marked, byDist)
-    table.sort(all, byDist)
-
-    -- только помеченные квестовые NPC (максимум 2); если меток нет - один ближайший
-    local source = (#marked > 0) and marked or all
-    local limit = (#marked > 0) and 2 or 1
-    local candidates = {}
-    for i = 1, math.min(limit, #source) do candidates[i] = source[i] end
-
-    for _, c in ipairs(candidates) do
-        if abort() then return false end
-        statusText = "Квест у NPC: " .. c.npc.Name
-        flyToPos(c.p.Position + Vector3.new(0, 3, 0), abort)
-        if try() then
-            QUEST_NPC_POS[q.name] = c.p.Position -- запоминаем: дальше летим сразу к нему
-            return true
-        end
-    end
-
-    if candidates[1] then
-        notify("Квест не взят. Пробовал NPC: " .. candidates[1].npc.Name)
-    end
-    return false
-end
-
 -- Ближайший живой моб ИМЕННО из квеста
 local function getNearestQuestMob(mobName)
     local folder = Workspace:FindFirstChild("Enemies")
@@ -523,13 +450,15 @@ local function attackMob(mob, q, abort)
         end
     end)
 
-    while not abort() and mroot.Parent and hum.Health > 0 and questActive() do
+    while not abort() and mroot.Parent and hum.Health > 0 do
         task.wait()
     end
     if conn then conn:Disconnect() end
+    return hum.Health <= 0
 end
 
--- Один цикл: взять квест -> бить мобов квеста -> когда квест завершён, цикл начнётся заново
+-- Квест берётся удалённым вызовом (без полётов к NPC) при старте фарма
+-- и снова каждый раз, когда прошлый завершён. Мобы бьются сразу.
 local function farmCycle()
     local function on() return alive and state.autoFarm end
     local abort = function() return not on() end
@@ -551,37 +480,62 @@ local function farmCycle()
         return (a - root.Position).Magnitude < (b - root.Position).Magnitude
     end)
     local anchor = spawns[1]
-    local cluster, sum = {}, Vector3.zero
+    local cluster = {}
     for _, p in ipairs(spawns) do
         if (p - anchor).Magnitude <= 250 then
             cluster[#cluster + 1] = p
-            sum = sum + p
         end
     end
-    local center = sum / #cluster
 
-    -- квест берём при старте фарма и после каждого завершённого
-    if not questActive() then
-        statusText = "Беру квест: " .. q.name
-        if not takeQuest(q, center, abort) then
-            notify("Не удалось взять квест " .. q.name)
-            return false
+    local function startQuest()
+        local comm = getCommF()
+        if comm then
+            pcall(function() comm:InvokeServer("StartQuest", q.name, q.idx) end)
         end
-        notify(("Квест взят: %s x%d"):format(q.mob, q.count))
     end
 
+    -- берём квест сразу при старте
+    statusText = "Беру квест: " .. q.name
+    startQuest()
+    task.wait(0.6)
+    local detect = questActive()  -- работает ли определение статуса квеста
+    notify(("Квест: %s, мобы: %s x%d"):format(q.name, q.mob, q.count))
+
+    local kills = 0
     local spIdx, lastSeen = 1, os.clock()
+    local lastTry, lastPick = os.clock(), os.clock()
 
-    while on() and questActive() do
+    while on() do
         local hum = getHumanoid()
         if not getRoot() or not hum or hum.Health <= 0 then return true end
+
+        -- прошлый квест завершён -> берём новый
+        if detect then
+            if not questActive() and os.clock() - lastTry > 2 then
+                lastTry = os.clock()
+                startQuest()
+            end
+        elseif kills >= q.count then
+            -- статус квеста не определяется: считаем убийства сами
+            kills = 0
+            startQuest()
+        end
+
+        -- раз в 5 сек проверяем, не пора ли сменить квест из-за уровня
+        if os.clock() - lastPick > 5 then
+            lastPick = os.clock()
+            local nq = pickQuest()
+            if nq and (nq.name ~= q.name or nq.idx ~= q.idx) then
+                return true -- новый цикл возьмёт новый квест
+            end
+        end
 
         equipWeapon()
         local mob = getNearestQuestMob(q.mob)
 
         if mob then
             lastSeen = os.clock()
-            attackMob(mob, q, abort)
+            if attackMob(mob, q, abort) then kills = kills + 1 end
         else
             statusText = "Жду мобов: " .. q.mob
             if os.clock() - lastSeen > 3 then
