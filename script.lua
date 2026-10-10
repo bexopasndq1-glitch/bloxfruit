@@ -1,4 +1,4 @@
--- VitaHub | Blox Fruits (v5) (запускать через executor)
+-- VitaHub | Blox Fruits (v5.1) (запускать через executor)
 -- Вкладки: Combat / Visuals / Misc
 -- F2 ESP фруктов | F3 полёт к фрукту | F4 автофарм | F5 смена оружия | F6 fast attack
 -- RightShift скрыть/показать GUI
@@ -16,7 +16,12 @@ local player = Players.LocalPlayer
 
 -- ===== Настройки =====
 local FLY_SPEED = 250        -- скорость полёта (студов/сек), меньше = безопаснее
-local FARM_HEIGHT = 10       -- высота зависания над мобом
+local FARM_HEIGHTS = {20, 30, 45, 60}   -- варианты высоты фарма (выбор в Combat)
+local farmHeightIndex = 2
+local FARM_HEIGHT = FARM_HEIGHTS[farmHeightIndex]      -- высота зависания над мобом
+local CRUISE_HEIGHTS = {80, 150, 250}     -- варианты высоты перелёта (выбор в Misc)
+local cruiseIndex = 2
+local CRUISE_HEIGHT = CRUISE_HEIGHTS[cruiseIndex]      -- на сколько выше всего летим при перелёте
 local FARM_APPROACH = 80     -- дальше этого расстояния сначала подлетаем
 local FAST_RANGE = 60        -- радиус, в котором fast attack бьёт мобов
 local MOB_LEVEL_SLACK = 5    -- насколько уровень моба может быть выше моего
@@ -221,13 +226,13 @@ local function clearPlayerESP()
 end
 
 -- ================= Полёт к фрукту =================
+local stopFarmPhysics, flyToPos -- определены ниже (общий полёт с набором высоты)
+
 local function stopFlying()
     flying = false
-    if currentTween then currentTween:Cancel() currentTween = nil end
-    if noclipConn then noclipConn:Disconnect() noclipConn = nil end
-    local root = getRoot()
-    local hold = root and root:FindFirstChild("FlyHold")
-    if hold then hold:Destroy() end
+    if not (state.autoFarm or state.autoFactory) then
+        stopFarmPhysics()
+    end
     refreshGui()
 end
 
@@ -242,7 +247,6 @@ local function flyToNearestFruit()
         return
     end
 
-    local char = player.Character
     local root = getRoot()
     if not root then return end
 
@@ -262,30 +266,19 @@ local function flyToNearestFruit()
 
     flying = true
     refreshGui()
-    notify(("Лечу к фрукту (%d студов)"):format(minDist))
+    notify(("Лечу к фрукту (%d студов), высота %d"):format(minDist, CRUISE_HEIGHT))
 
-    local hold = Instance.new("BodyVelocity")
-    hold.Name = "FlyHold"
-    hold.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-    hold.Velocity = Vector3.zero
-    hold.Parent = root
-
-    noclipConn = RunService.Stepped:Connect(function()
-        for _, part in ipairs(char:GetDescendants()) do
-            if part:IsA("BasePart") then part.CanCollide = false end
+    task.spawn(function()
+        local ok = flyToPos(nearest.Position + Vector3.new(0, 3, 0), function()
+            return not flying or not alive or not nearest.Parent
+        end)
+        if flying then
+            local r = getRoot()
+            if ok and r and nearest.Parent then r.CFrame = nearest.CFrame end -- касание = подбор
+            stopFlying()
+            if ok then notify("Прилетел") end
         end
     end)
-
-    currentTween = TweenService:Create(
-        root,
-        TweenInfo.new(minDist / FLY_SPEED, Enum.EasingStyle.Linear),
-        {CFrame = nearest.CFrame + Vector3.new(0, 3, 0)}
-    )
-    currentTween.Completed:Connect(function()
-        stopFlying()
-        notify("Прилетел")
-    end)
-    currentTween:Play()
 end
 
 -- ================= Клик-цикл =================
@@ -332,13 +325,14 @@ local function netAttack()
     end
 
     local onlyMob = (state.autoFarm or state.autoFactory) and farmMobName or nil
+    local range = math.max(FAST_RANGE, FARM_HEIGHT + 30)
 
     local list = {}
     for _, e in ipairs(folder:GetChildren()) do
         local hum = e:FindFirstChildOfClass("Humanoid")
         local er = e:FindFirstChild("HumanoidRootPart")
         if hum and er and hum.Health > 0
-            and (er.Position - root.Position).Magnitude <= FAST_RANGE
+            and (er.Position - root.Position).Magnitude <= range
             and (not onlyMob or baseName(e.Name) == onlyMob) then
             list[#list + 1] = {e, er}
         end
@@ -405,7 +399,7 @@ local function startFarmPhysics()
     end
 end
 
-local function stopFarmPhysics()
+function stopFarmPhysics()
     if farmTween then farmTween:Cancel() farmTween = nil end
     if farmNoclip then farmNoclip:Disconnect() farmNoclip = nil end
     local root = getRoot()
@@ -413,13 +407,14 @@ local function stopFarmPhysics()
     if hold then hold:Destroy() end
 end
 
--- Плавный полёт в точку. abort() == true прерывает. Возвращает true, если долетели.
-local function flyToPos(dest, abort)
+-- Один прямой отрезок полёта. abort() == true прерывает.
+local function tweenTo(dest, abort)
     local root = getRoot()
     if not root then return false end
-    startFarmPhysics()
 
     local dist = (dest - root.Position).Magnitude
+    if dist < 1 then return true end
+
     local t = TweenService:Create(
         root,
         TweenInfo.new(math.max(dist / FLY_SPEED, 0.05), Enum.EasingStyle.Linear),
@@ -438,6 +433,25 @@ local function flyToPos(dest, abort)
     end
     farmTween = nil
     return true
+end
+
+-- Полёт в точку. На длинных дистанциях: вверх -> над картой -> вниз к цели.
+-- Возвращает true, если долетели.
+function flyToPos(dest, abort)
+    local root = getRoot()
+    if not root then return false end
+    startFarmPhysics()
+
+    local pos = root.Position
+    local flat = (Vector3.new(dest.X, 0, dest.Z) - Vector3.new(pos.X, 0, pos.Z)).Magnitude
+
+    if flat > 120 then
+        local cruiseY = math.max(pos.Y, dest.Y) + CRUISE_HEIGHT -- считаем один раз
+        if not tweenTo(Vector3.new(pos.X, cruiseY, pos.Z), abort) then return false end
+        if not tweenTo(Vector3.new(dest.X, cruiseY, dest.Z), abort) then return false end
+    end
+
+    return tweenTo(dest, abort)
 end
 
 -- ===== Квесты =====
@@ -799,7 +813,7 @@ task.spawn(function()
                 if not ok and alive and state.autoFarm then task.wait(2) end
             end
         else
-            if not state.autoFactory then
+            if not state.autoFactory and not flying then
                 if not state.autoFarm and not state.autoStats and not state.autoGacha then
                     statusText = "Автофарм выкл"
                 end
@@ -984,6 +998,18 @@ local function setStat(i)
     refreshGui()
 end
 
+local function setFarmHeight(i)
+    farmHeightIndex = i
+    FARM_HEIGHT = FARM_HEIGHTS[i]
+    refreshGui()
+end
+
+local function setCruiseHeight(i)
+    cruiseIndex = i
+    CRUISE_HEIGHT = CRUISE_HEIGHTS[i]
+    refreshGui()
+end
+
 -- ================= GUI: Liquid Glass =================
 local gui = Instance.new("ScreenGui")
 gui.Name = "VitaHubGui"
@@ -1148,7 +1174,7 @@ local subLbl = Instance.new("TextLabel")
 subLbl.Position = UDim2.new(0, 20, 0, 36)
 subLbl.Size = UDim2.new(0, 220, 0, 14)
 subLbl.BackgroundTransparency = 1
-subLbl.Text = "Blox Fruits  •  v5"
+subLbl.Text = "Blox Fruits  •  v5.1"
 subLbl.TextColor3 = MUTED
 subLbl.Font = Enum.Font.Gotham
 subLbl.TextSize = 12
@@ -1444,6 +1470,8 @@ makeToggle(combatPage, "Автофарм", "F4", function() return state.autoFar
 makeToggle(combatPage, "Fast Attack", "F6", function() return state.fastAttack end, toggleFast)
 sectionLabel(combatPage, "ОРУЖИЕ  (F5 - сменить)")
 makeSegment(combatPage, {"Melee", "Sword", "Fruit"}, function() return weaponIndex end, setWeapon)
+sectionLabel(combatPage, "ВЫСОТА ФАРМА (над мобами)")
+makeSegment(combatPage, {"20", "30", "45", "60"}, function() return farmHeightIndex end, setFarmHeight)
 
 -- ===== Вкладка Visuals =====
 sectionLabel(visualsPage, "ESP")
@@ -1463,6 +1491,9 @@ makeButton(miscPage,
     function() return state.autoStats end,
     toggleStats)
 local statsInfo = makeInfo(miscPage)
+
+sectionLabel(miscPage, "ВЫСОТА ПОЛЁТА (перелёты)")
+makeSegment(miscPage, {"80", "150", "250"}, function() return cruiseIndex end, setCruiseHeight)
 
 sectionLabel(miscPage, "ПРОЧЕЕ")
 makeToggle(miscPage, "Полёт к фрукту", "F3", function() return flying end, flyToNearestFruit)
