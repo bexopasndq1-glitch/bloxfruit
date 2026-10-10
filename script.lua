@@ -1,4 +1,4 @@
--- VitaHub | Blox Fruits (v5.1) (запускать через executor)
+-- VitaHub | Blox Fruits (v5.3) - Russian / English (запускать через executor)
 -- Вкладки: Combat / Visuals / Misc
 -- F2 ESP фруктов | F3 полёт к фрукту | F4 автофарм | F5 смена оружия | F6 fast attack
 -- RightShift скрыть/показать GUI
@@ -41,6 +41,234 @@ local MUTED    = Color3.fromRGB(170, 172, 200)
 local RED      = Color3.fromRGB(220, 70, 90)
 local GOOD     = Color3.fromRGB(52, 199, 120)
 
+-- ===== Выбор языка / Language select =====
+local LANG
+do
+    local selGui = Instance.new("ScreenGui")
+    selGui.Name = "VitaHubLang"
+    selGui.ResetOnSpawn = false
+    selGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    local okP = pcall(function() selGui.Parent = (gethui and gethui()) or game:GetService("CoreGui") end)
+    if not okP or not selGui.Parent then selGui.Parent = player:WaitForChild("PlayerGui") end
+
+    local function round(obj, r)
+        local c = Instance.new("UICorner")
+        c.CornerRadius = UDim.new(0, r)
+        c.Parent = obj
+    end
+
+    local panel = Instance.new("Frame")
+    panel.Size = UDim2.new(0, 360, 0, 200)
+    panel.Position = UDim2.new(0.5, -180, 0.5, -100)
+    panel.BackgroundColor3 = Color3.new(1, 1, 1)
+    panel.BackgroundTransparency = 0.22
+    panel.BorderSizePixel = 0
+    panel.Parent = selGui
+    round(panel, 20)
+
+    local pg = Instance.new("UIGradient")
+    pg.Color = ColorSequence.new(Color3.fromRGB(76, 64, 148), Color3.fromRGB(16, 18, 38))
+    pg.Rotation = 55
+    pg.Parent = panel
+
+    local ps = Instance.new("UIStroke")
+    ps.Color = Color3.new(1, 1, 1)
+    ps.Thickness = 1.6
+    ps.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    ps.Parent = panel
+
+    local psg = Instance.new("UIGradient")
+    psg.Rotation = 45
+    psg.Transparency = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 0.1),
+        NumberSequenceKeypoint.new(0.5, 0.88),
+        NumberSequenceKeypoint.new(1, 0.2),
+    })
+    psg.Parent = ps
+
+    local title = Instance.new("TextLabel")
+    title.Position = UDim2.new(0, 0, 0, 22)
+    title.Size = UDim2.new(1, 0, 0, 36)
+    title.BackgroundTransparency = 1
+    title.Text = "VitaHub"
+    title.TextColor3 = Color3.new(1, 1, 1)
+    title.Font = Enum.Font.GothamBlack
+    title.TextSize = 30
+    title.Parent = panel
+    local tg = Instance.new("UIGradient")
+    tg.Color = ColorSequence.new(ACCENT, ACCENT2)
+    tg.Rotation = 20
+    tg.Parent = title
+
+    local sub = Instance.new("TextLabel")
+    sub.Position = UDim2.new(0, 0, 0, 64)
+    sub.Size = UDim2.new(1, 0, 0, 20)
+    sub.BackgroundTransparency = 1
+    sub.Text = "Выбери язык  /  Choose your language"
+    sub.TextColor3 = MUTED
+    sub.Font = Enum.Font.Gotham
+    sub.TextSize = 14
+    sub.Parent = panel
+
+    local function langButton(text, x, code)
+        local b = Instance.new("TextButton")
+        b.Size = UDim2.new(0, 150, 0, 54)
+        b.Position = UDim2.new(0, x, 0, 112)
+        b.Text = text
+        b.TextColor3 = Color3.new(1, 1, 1)
+        b.Font = Enum.Font.GothamBold
+        b.TextSize = 18
+        b.AutoButtonColor = false
+        b.BackgroundColor3 = Color3.new(1, 1, 1)
+        b.BackgroundTransparency = 0.88
+        b.BorderSizePixel = 0
+        b.Parent = panel
+        round(b, 14)
+
+        local st = Instance.new("UIStroke")
+        st.Color = Color3.new(1, 1, 1)
+        st.Transparency = 0.7
+        st.Thickness = 1
+        st.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+        st.Parent = b
+
+        b.MouseEnter:Connect(function()
+            b.BackgroundColor3 = ACCENT
+            b.BackgroundTransparency = 0.25
+        end)
+        b.MouseLeave:Connect(function()
+            b.BackgroundColor3 = Color3.new(1, 1, 1)
+            b.BackgroundTransparency = 0.88
+        end)
+        b.Activated:Connect(function() LANG = code end)
+    end
+
+    langButton("Русский", 20, "ru")
+    langButton("English", 190, "en")
+
+    while not LANG do
+        if not selGui.Parent then LANG = "en" break end
+        task.wait(0.1)
+    end
+    pcall(function() selGui:Destroy() end)
+end
+
+local I18N = {
+    ru = {
+        status_wait = "Ожидание",
+        cancelled = "Полёт отменён",
+        turn_off_farm = "Сначала выключи автофарм / Factory",
+        no_fruits = "Фруктов на карте нет",
+        fly_fruit = "Лечу к фрукту (%d студов), высота %d",
+        arrived = "Прилетел",
+        net_missing = "Ремоуты fast attack не найдены, работает только клик",
+        no_spawns = "нет споунов моба %s",
+        mob_strong = "моб %s слишком сильный (Lv. %d)",
+        quest_skipped = "Пропущен квест %s (Lv %d): %s",
+        quest_skipped_log = "[VitaHub] пропущен %s:%s (req %d) - %s",
+        abandon_fail = "Не удалось отменить старый квест, проверь вручную",
+        status_attack = "%s | игрок %d | моб %s | %s x%d",
+        no_quest = "Не нашёл квест под твой уровень, автофарм выключен",
+        quest_log = "[VitaHub] квест %s:%s, моб %s x%d, req %d, игрок lvl %d",
+        taking_quest = "Беру квест: %s",
+        quest_failed = "Квест не взялся: %s, бью мобов без него",
+        quest_taken = "Квест %s (от lvl %d), мобы %s x%d, игрок lvl %d",
+        waiting_mobs = "Жду мобов: %s",
+        waiting_respawn = "Жду респавн",
+        farm_off = "Автофарм выкл",
+        factory_wait = "Factory: жду Core (Sea 2)",
+        call_error = "ошибка вызова",
+        commf_missing = "CommF_ не найден",
+        gacha_got = "получено (см. инвентарь)",
+        max = "максимум",
+        stat_max3 = "Можно выбрать максимум 3 стата",
+        hint = "RightShift -\nскрыть меню",
+        sec_farm = "ФАРМ",
+        tg_autofarm = "Автофарм",
+        sec_weapon = "ОРУЖИЕ  (F5 - сменить)",
+        sec_farm_height = "ВЫСОТА ФАРМА (над мобами)",
+        sec_auto = "АВТО",
+        tg_gacha = "Auto Gacha (ролл фрукта)",
+        sec_stats = "СТАТЫ  (куда качать)",
+        tg_split = "Разделение (до 3 статов)",
+        btn_stop_stats = "Остановить прокачку",
+        btn_start_stats = "Начать прокачку",
+        sec_cruise = "ВЫСОТА ПОЛЁТА (перелёты)",
+        sec_misc = "ПРОЧЕЕ",
+        tg_flyfruit = "Полёт к фрукту",
+        tg_blur = "Blur фона (стекло)",
+        killed = "VitaHub остановлен, GUI удалён",
+        lvl_label = "Твой Лвл : ",
+        next_label = "Следующий Остров : ",
+        stats_info = "Очков: %d  |  Качаю: %s",
+        storage_info = "Хранилище: ",
+        gacha_info = "Ответ сервера: ",
+        loaded = "VitaHub v5 загружен. RightShift - скрыть меню",
+    },
+    en = {
+        status_wait = "Idle",
+        cancelled = "Flight cancelled",
+        turn_off_farm = "Turn off Auto Farm / Factory first",
+        no_fruits = "No fruits on the map",
+        fly_fruit = "Flying to fruit (%d studs), altitude %d",
+        arrived = "Arrived",
+        net_missing = "Fast attack remotes not found, clicks only",
+        no_spawns = "no spawns for mob %s",
+        mob_strong = "mob %s is too strong (Lv. %d)",
+        quest_skipped = "Skipped quest %s (Lv %d): %s",
+        quest_skipped_log = "[VitaHub] skipped %s:%s (req %d) - %s",
+        abandon_fail = "Couldn't abandon the old quest, check it manually",
+        status_attack = "%s | player %d | mob %s | %s x%d",
+        no_quest = "No quest found for your level, Auto Farm turned off",
+        quest_log = "[VitaHub] quest %s:%s, mob %s x%d, req %d, player lvl %d",
+        taking_quest = "Taking quest: %s",
+        quest_failed = "Quest not accepted: %s, fighting mobs without it",
+        quest_taken = "Quest %s (from lvl %d), mobs %s x%d, player lvl %d",
+        waiting_mobs = "Waiting for mobs: %s",
+        waiting_respawn = "Waiting for respawn",
+        farm_off = "Auto Farm off",
+        factory_wait = "Factory: waiting for Core (Sea 2)",
+        call_error = "call error",
+        commf_missing = "CommF_ not found",
+        gacha_got = "received (check inventory)",
+        max = "max",
+        stat_max3 = "You can select up to 3 stats",
+        hint = "RightShift -\nhide menu",
+        sec_farm = "FARM",
+        tg_autofarm = "Auto Farm",
+        sec_weapon = "WEAPON  (F5 - switch)",
+        sec_farm_height = "FARM HEIGHT (above mobs)",
+        sec_auto = "AUTO",
+        tg_gacha = "Auto Gacha (roll fruit)",
+        sec_stats = "STATS  (where to invest)",
+        tg_split = "Split (up to 3 stats)",
+        btn_stop_stats = "Stop leveling",
+        btn_start_stats = "Start leveling",
+        sec_cruise = "FLIGHT HEIGHT (travel)",
+        sec_misc = "OTHER",
+        tg_flyfruit = "Fly to fruit",
+        tg_blur = "Background blur (glass)",
+        killed = "VitaHub stopped, GUI removed",
+        lvl_label = "Your Lvl : ",
+        next_label = "Next Island : ",
+        stats_info = "Points: %d  |  Leveling: %s",
+        storage_info = "Storage: ",
+        gacha_info = "Server reply: ",
+        loaded = "VitaHub v5 loaded. RightShift - hide menu",
+    },
+}
+
+-- T("key") или T("key", ...) для строк с %s / %d
+local function T(key, ...)
+    local pack = I18N[LANG] or I18N.ru
+    local str = pack[key] or I18N.ru[key] or key
+    if select("#", ...) > 0 then
+        local ok, res = pcall(string.format, str, ...)
+        return ok and res or str
+    end
+    return str
+end
+
 local alive = true           -- false после "Убить GUI": все циклы завершаются
 local connections = {}
 local function track(c) table.insert(connections, c) return c end
@@ -62,7 +290,7 @@ end
 local flying = false
 local currentTween
 local noclipConn
-local statusText = "Ожидание"
+local statusText = T("status_wait")
 local gachaStatus = "-"
 
 local state = {
@@ -73,12 +301,18 @@ local state = {
     autoFactory = false,
     autoStats = false,
     autoGacha = false,
+    autoStore = false,
+    splitStats = false,
     blur = true,
 }
 
 local STAT_NAMES = {"Melee", "Defense", "Sword", "Gun", "Demon Fruit"}
 local STAT_LABELS = {"Melee", "Defense", "Sword", "Gun", "Fruit"}
 local statIndex = 1
+local splitSel = {}      -- выбранные статы в режиме "Разделение" (индексы), максимум 3
+local splitRot = 0       -- сдвиг для честной раздачи остатка
+local storeStatus = "-"
+local storeTried = setmetatable({}, {__mode = "k"})
 
 local refreshGui = function() end
 
@@ -239,11 +473,11 @@ end
 local function flyToNearestFruit()
     if flying then
         stopFlying()
-        notify("Полёт отменён")
+        notify(T("cancelled"))
         return
     end
     if state.autoFarm or state.autoFactory then
-        notify("Сначала выключи автофарм / Factory")
+        notify(T("turn_off_farm"))
         return
     end
 
@@ -260,13 +494,13 @@ local function flyToNearestFruit()
     end
 
     if not nearest then
-        notify("Фруктов на карте нет")
+        notify(T("no_fruits"))
         return
     end
 
     flying = true
     refreshGui()
-    notify(("Лечу к фрукту (%d студов), высота %d"):format(minDist, CRUISE_HEIGHT))
+    notify(T("fly_fruit", math.floor(minDist), CRUISE_HEIGHT))
 
     task.spawn(function()
         local ok = flyToPos(nearest.Position + Vector3.new(0, 3, 0), function()
@@ -276,7 +510,7 @@ local function flyToNearestFruit()
             local r = getRoot()
             if ok and r and nearest.Parent then r.CFrame = nearest.CFrame end -- касание = подбор
             stopFlying()
-            if ok then notify("Прилетел") end
+            if ok then notify(T("arrived")) end
         end
     end)
 end
@@ -319,7 +553,7 @@ local function netAttack()
     if not (RegisterAttack and RegisterHit) then
         if not netWarned then
             netWarned = true
-            notify("Ремоуты fast attack не найдены, работает только клик")
+            notify(T("net_missing"))
         end
         return
     end
@@ -530,11 +764,11 @@ end
 
 local function skipReason(c, lvl)
     if #getSpawnPositions(c.mob) == 0 then
-        return "нет споунов моба " .. c.mob
+        return T("no_spawns", c.mob)
     end
     local ml = liveMobLevel(c.mob)
     if ml and ml > lvl + MOB_LEVEL_SLACK then
-        return ("моб %s слишком сильный (Lv. %d)"):format(c.mob, ml)
+        return T("mob_strong", c.mob, ml)
     end
     return nil
 end
@@ -594,11 +828,11 @@ local function pickQuest()
                 local key = tostring(top.name) .. ":" .. tostring(top.idx)
                 if not warnedSkips[key] then
                     warnedSkips[key] = true
-                    notify(("Пропущен квест %s (Lv %d): %s"):format(tostring(top.name), top.req, top.why))
+                    notify(T("quest_skipped", tostring(top.name), top.req, top.why))
                 end
             end
             for i = 1, math.min(3, #skipped) do
-                print(("[VitaHub] пропущен %s:%s (req %d) - %s"):format(
+                print(T("quest_skipped_log",
                     tostring(skipped[i].name), tostring(skipped[i].idx), skipped[i].req, skipped[i].why))
             end
             return c
@@ -653,7 +887,7 @@ local function ensureQuest(q, abort)
             if not questActive() then break end
         end
         if questActive() then
-            notify("Не удалось отменить старый квест, проверь вручную")
+            notify(T("abandon_fail"))
         end
     end
 
@@ -690,7 +924,7 @@ local function attackMob(mob, q, abort)
     local hum = mob:FindFirstChildOfClass("Humanoid")
     if not mroot or not hum then return end
 
-    statusText = ("%s | игрок %d | моб %s | %s x%d"):format(
+    statusText = T("status_attack",
         q.mob, getPlayerLevel(), tostring(getMobLevel(mob) or "?"), tostring(q.name), q.count)
 
     local r = getRoot()
@@ -723,13 +957,13 @@ local function farmCycle()
 
     local q = pickQuest()
     if not q then
-        notify("Не нашёл квест под твой уровень, автофарм выключен")
+        notify(T("no_quest"))
         state.autoFarm = false
         refreshGui()
         return true
     end
     farmMobName = q.mob
-    print(("[VitaHub] квест %s:%s, моб %s x%d, req %d, игрок lvl %d"):format(
+    print(T("quest_log",
         tostring(q.name), tostring(q.idx), q.mob, q.count, q.req, getPlayerLevel()))
 
     local root = getRoot()
@@ -747,12 +981,12 @@ local function farmCycle()
         end
     end
 
-    statusText = "Беру квест: " .. tostring(q.name)
+    statusText = T("taking_quest", tostring(q.name))
     if not ensureQuest(q, abort) then
-        notify("Квест не взялся: " .. tostring(q.name) .. ", бью мобов без него")
+        notify(T("quest_failed", tostring(q.name)))
     end
     local detect = questActive()
-    notify(("Квест %s (от lvl %d), мобы %s x%d, игрок lvl %d"):format(
+    notify(T("quest_taken",
         tostring(q.name), q.req, q.mob, q.count, getPlayerLevel()))
 
     local kills = 0
@@ -788,7 +1022,7 @@ local function farmCycle()
             lastSeen = os.clock()
             if attackMob(mob, q, abort) then kills = kills + 1 end
         else
-            statusText = "Жду мобов: " .. q.mob
+            statusText = T("waiting_mobs", q.mob)
             if os.clock() - lastSeen > 3 then
                 spIdx = spIdx % #cluster + 1
                 flyToPos(cluster[spIdx] + Vector3.new(0, FARM_HEIGHT, 0), abort)
@@ -806,7 +1040,7 @@ task.spawn(function()
         if state.autoFarm then
             local hum = getHumanoid()
             if not getRoot() or not hum or hum.Health <= 0 then
-                statusText = "Жду респавн"
+                statusText = T("waiting_respawn")
                 task.wait(1)
             else
                 local ok = farmCycle()
@@ -815,7 +1049,7 @@ task.spawn(function()
         else
             if not state.autoFactory and not flying then
                 if not state.autoFarm and not state.autoStats and not state.autoGacha then
-                    statusText = "Автофарм выкл"
+                    statusText = T("farm_off")
                 end
                 farmMobName = nil
                 stopFarmPhysics()
@@ -851,7 +1085,7 @@ task.spawn(function()
                     return not (alive and state.autoFactory) or state.autoFarm
                 end)
             else
-                statusText = "Factory: жду Core (Sea 2)"
+                statusText = T("factory_wait")
                 if farmMobName == "Core" then farmMobName = nil end
                 task.wait(2)
             end
@@ -863,17 +1097,95 @@ task.spawn(function()
 end)
 
 -- ================= Статы =================
+-- Обычный режим: все очки в один выбранный стат.
+-- Режим "Разделение": очки делятся поровну между выбранными статами (до 3),
+-- остаток раздаётся по одному, каждый раз начиная с другого стата.
 task.spawn(function()
     while alive do
         if state.autoStats then
-            local pts = getPoints()
-            if pts > 0 then
+            local total = getPoints()
+            if total > 0 then
                 local comm = getCommF()
                 if comm then
-                    pcall(function() comm:InvokeServer("AddPoint", STAT_NAMES[statIndex], pts) end)
+                    local targets = {}
+                    if state.splitStats then
+                        for i = 1, #STAT_NAMES do
+                            if splitSel[i] then targets[#targets + 1] = STAT_NAMES[i] end
+                        end
+                    end
+                    if #targets == 0 then targets = { STAT_NAMES[statIndex] } end
+
+                    local n = #targets
+                    local share = math.floor(total / n)
+                    local rest = total - share * n
+
+                    local amounts = {}
+                    for k = 1, n do amounts[k] = share end
+                    for r = 1, rest do
+                        local k = ((splitRot + r) % n) + 1
+                        amounts[k] = amounts[k] + 1
+                    end
+                    splitRot = (splitRot + rest) % n
+
+                    for k, stat in ipairs(targets) do
+                        if amounts[k] > 0 then
+                            pcall(function() comm:InvokeServer("AddPoint", stat, amounts[k]) end)
+                            task.wait(0.15)
+                        end
+                    end
                 end
             end
             task.wait(0.5)
+        else
+            task.wait(0.5)
+        end
+    end
+end)
+
+-- ================= Auto Store Fruit =================
+-- Прячет фрукты из рюкзака в инвентарь (StoreFruit).
+local function fruitRemoteName(tool)
+    local attr = tool:GetAttribute("OriginalName")
+    if type(attr) == "string" and attr ~= "" then return attr end
+
+    -- запасной вариант: "Rocket Fruit" -> "Rocket-Rocket"
+    local base = tool.Name:gsub("%s*Fruit%s*$", "")
+    base = base:gsub("^%s+", "")
+    return base .. "-" .. base
+end
+
+task.spawn(function()
+    while alive do
+        if state.autoStore then
+            local comm = getCommF()
+            if comm then
+                local containers = { player.Backpack, player.Character }
+                for _, container in ipairs(containers) do
+                    if container then
+                        for _, tool in ipairs(container:GetChildren()) do
+                            if tool:IsA("Tool") and tool.Name:find("Fruit") then
+                                local last = storeTried[tool]
+                                if not last or os.clock() - last > 10 then
+                                    storeTried[tool] = os.clock()
+                                    local fname = fruitRemoteName(tool)
+                                    local ok, res = pcall(function()
+                                        return comm:InvokeServer("StoreFruit", fname, tool)
+                                    end)
+                                    if not ok then
+                                        storeStatus = T("call_error")
+                                    else
+                                        storeStatus = fname .. ": " .. tostring(res)
+                                    end
+                                    task.wait(0.3)
+                                end
+                            end
+                        end
+                    end
+                end
+            else
+                storeStatus = T("commf_missing")
+            end
+            task.wait(2)
         else
             task.wait(0.5)
         end
@@ -888,14 +1200,14 @@ task.spawn(function()
             if comm then
                 local ok, res = pcall(function() return comm:InvokeServer("Cousin", "Buy") end)
                 if not ok then
-                    gachaStatus = "ошибка вызова"
+                    gachaStatus = T("call_error")
                 elseif type(res) == "table" then
-                    gachaStatus = "получено (см. инвентарь)"
+                    gachaStatus = T("gacha_got")
                 else
                     gachaStatus = tostring(res)
                 end
             else
-                gachaStatus = "CommF_ не найден"
+                gachaStatus = T("commf_missing")
             end
             task.wait(3)
         else
@@ -935,7 +1247,7 @@ local function nextIslandText(lvl)
     end
 
     nextCacheLvl = lvl
-    nextCacheText = nextReq and (seaForLevel(nextReq) .. " • Lv " .. nextReq) or "максимум"
+    nextCacheText = nextReq and (seaForLevel(nextReq) .. " • Lv " .. nextReq) or T("max")
     return nextCacheText
 end
 
@@ -986,6 +1298,19 @@ local function toggleGacha()
     refreshGui()
 end
 
+local function toggleStore()
+    state.autoStore = not state.autoStore
+    refreshGui()
+end
+
+local function toggleSplit()
+    state.splitStats = not state.splitStats
+    if state.splitStats and next(splitSel) == nil then
+        splitSel[statIndex] = true
+    end
+    refreshGui()
+end
+
 local function setWeapon(i)
     weaponIndex = i
     local hum = getHumanoid()
@@ -994,7 +1319,21 @@ local function setWeapon(i)
 end
 
 local function setStat(i)
-    statIndex = i
+    if state.splitStats then
+        if splitSel[i] then
+            splitSel[i] = nil
+        else
+            local count = 0
+            for _ in pairs(splitSel) do count = count + 1 end
+            if count >= 3 then
+                notify(T("stat_max3"))
+                return
+            end
+            splitSel[i] = true
+        end
+    else
+        statIndex = i
+    end
     refreshGui()
 end
 
@@ -1174,7 +1513,7 @@ local subLbl = Instance.new("TextLabel")
 subLbl.Position = UDim2.new(0, 20, 0, 36)
 subLbl.Size = UDim2.new(0, 220, 0, 14)
 subLbl.BackgroundTransparency = 1
-subLbl.Text = "Blox Fruits  •  v5.1"
+subLbl.Text = "Blox Fruits  •  v5.3"
 subLbl.TextColor3 = MUTED
 subLbl.Font = Enum.Font.Gotham
 subLbl.TextSize = 12
@@ -1264,7 +1603,7 @@ local hint = Instance.new("TextLabel")
 hint.Position = UDim2.new(0, 0, 1, -34)
 hint.Size = UDim2.new(1, 0, 0, 32)
 hint.BackgroundTransparency = 1
-hint.Text = "RightShift -\nскрыть меню"
+hint.Text = T("hint")
 hint.TextColor3 = MUTED
 hint.Font = Enum.Font.Gotham
 hint.TextSize = 11
@@ -1394,7 +1733,7 @@ local function makeToggle(parent, text, hotkey, getFn, callback)
     end)
 end
 
-local function makeSegment(parent, labels, getIdx, onSelect)
+local function makeSegment(parent, labels, getIdx, onSelect, isSel)
     local row = Instance.new("Frame")
     row.Size = UDim2.new(1, 0, 0, 36)
     row.BackgroundTransparency = 1
@@ -1421,7 +1760,8 @@ local function makeSegment(parent, labels, getIdx, onSelect)
 
     table.insert(updaters, function()
         for i, b in ipairs(buttons) do
-            local sel = (i == getIdx())
+            local sel
+            if isSel then sel = isSel(i) else sel = (i == getIdx()) end
             b.BackgroundColor3 = sel and ACCENT or Color3.new(1, 1, 1)
             b.BackgroundTransparency = sel and 0.15 or 0.9
         end
@@ -1465,12 +1805,12 @@ local function makeInfo(parent)
 end
 
 -- ===== Вкладка Combat =====
-sectionLabel(combatPage, "ФАРМ")
-makeToggle(combatPage, "Автофарм", "F4", function() return state.autoFarm end, toggleFarm)
+sectionLabel(combatPage, T("sec_farm"))
+makeToggle(combatPage, T("tg_autofarm"), "F4", function() return state.autoFarm end, toggleFarm)
 makeToggle(combatPage, "Fast Attack", "F6", function() return state.fastAttack end, toggleFast)
-sectionLabel(combatPage, "ОРУЖИЕ  (F5 - сменить)")
+sectionLabel(combatPage, T("sec_weapon"))
 makeSegment(combatPage, {"Melee", "Sword", "Fruit"}, function() return weaponIndex end, setWeapon)
-sectionLabel(combatPage, "ВЫСОТА ФАРМА (над мобами)")
+sectionLabel(combatPage, T("sec_farm_height"))
 makeSegment(combatPage, {"20", "30", "45", "60"}, function() return farmHeightIndex end, setFarmHeight)
 
 -- ===== Вкладка Visuals =====
@@ -1479,25 +1819,31 @@ makeToggle(visualsPage, "ESP Fruits", "F2", function() return state.espFruits en
 makeToggle(visualsPage, "ESP Players", "", function() return state.espPlayers end, togglePlayerESP)
 
 -- ===== Вкладка Misc =====
-sectionLabel(miscPage, "АВТО")
+sectionLabel(miscPage, T("sec_auto"))
 makeToggle(miscPage, "Auto Factory Core", "", function() return state.autoFactory end, toggleFactory)
-makeToggle(miscPage, "Auto Gacha (ролл фрукта)", "", function() return state.autoGacha end, toggleGacha)
+makeToggle(miscPage, T("tg_gacha"), "", function() return state.autoGacha end, toggleGacha)
 local gachaInfo = makeInfo(miscPage)
+makeToggle(miscPage, "Auto Store Fruit", "", function() return state.autoStore end, toggleStore)
+local storeInfo = makeInfo(miscPage)
 
-sectionLabel(miscPage, "СТАТЫ  (куда качать)")
-makeSegment(miscPage, STAT_LABELS, function() return statIndex end, setStat)
+sectionLabel(miscPage, T("sec_stats"))
+makeToggle(miscPage, T("tg_split"), "", function() return state.splitStats end, toggleSplit)
+makeSegment(miscPage, STAT_LABELS, function() return statIndex end, setStat, function(i)
+    if state.splitStats then return splitSel[i] == true end
+    return statIndex == i
+end)
 makeButton(miscPage,
-    function() return state.autoStats and "Остановить прокачку" or "Начать прокачку" end,
+    function() return state.autoStats and T("btn_stop_stats") or T("btn_start_stats") end,
     function() return state.autoStats end,
     toggleStats)
 local statsInfo = makeInfo(miscPage)
 
-sectionLabel(miscPage, "ВЫСОТА ПОЛЁТА (перелёты)")
+sectionLabel(miscPage, T("sec_cruise"))
 makeSegment(miscPage, {"80", "150", "250"}, function() return cruiseIndex end, setCruiseHeight)
 
-sectionLabel(miscPage, "ПРОЧЕЕ")
-makeToggle(miscPage, "Полёт к фрукту", "F3", function() return flying end, flyToNearestFruit)
-makeToggle(miscPage, "Blur фона (стекло)", "", function() return state.blur end, toggleBlur)
+sectionLabel(miscPage, T("sec_misc"))
+makeToggle(miscPage, T("tg_flyfruit"), "F3", function() return flying end, flyToNearestFruit)
+makeToggle(miscPage, T("tg_blur"), "", function() return state.blur end, toggleBlur)
 
 -- ===== Строка статуса =====
 local statusRow = Instance.new("Frame")
@@ -1574,6 +1920,7 @@ local function killAll()
     state.autoFarm, state.fastAttack = false, false
     state.espFruits, state.espPlayers = false, false
     state.autoFactory, state.autoStats, state.autoGacha = false, false, false
+    state.autoStore = false
     stopFlying()
     stopFarmPhysics()
     clearFruitESP()
@@ -1581,7 +1928,7 @@ local function killAll()
     for _, c in ipairs(connections) do pcall(function() c:Disconnect() end) end
     pcall(function() blur:Destroy() end)
     gui:Destroy()
-    notify("VitaHub остановлен, GUI удалён")
+    notify(T("killed"))
 end
 
 windowButton("-", -76, nil, function() setGuiVisible(false) end)
@@ -1591,10 +1938,19 @@ windowButton("X", -40, RED, killAll)
 task.spawn(function()
     while alive do
         local lvl = getPlayerLevel()
-        lvlLabel.Text = "Твой Лвл : " .. lvl
-        nextLabel.Text = "Следующий Остров : " .. nextIslandText(lvl)
-        statsInfo.Text = ("Свободных очков: %d  |  Качаю: %s"):format(getPoints(), STAT_LABELS[statIndex])
-        gachaInfo.Text = "Ответ сервера: " .. gachaStatus
+        lvlLabel.Text = T("lvl_label") .. lvl
+        nextLabel.Text = T("next_label") .. nextIslandText(lvl)
+        local names = {}
+        if state.splitStats then
+            for i = 1, #STAT_LABELS do
+                if splitSel[i] then names[#names + 1] = STAT_LABELS[i] end
+            end
+        else
+            names[1] = STAT_LABELS[statIndex]
+        end
+        statsInfo.Text = T("stats_info", getPoints(), table.concat(names, " + "))
+        storeInfo.Text = T("storage_info") .. storeStatus
+        gachaInfo.Text = T("gacha_info") .. gachaStatus
         status.Text = statusText
         task.wait(0.5)
     end
@@ -1631,4 +1987,4 @@ end))
 
 setTab("Combat")
 applyBlur()
-notify("VitaHub v5 загружен. RightShift - скрыть меню")
+notify(T("loaded"))
