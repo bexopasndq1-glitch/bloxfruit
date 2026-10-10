@@ -430,25 +430,53 @@ local function takeQuest(q, center, abort)
         if try() then return true end
     end
 
-    -- 3) ищем NPC рядом с зоной мобов и пробуем по очереди
+    -- 3) ищем именно квестовых NPC (с меткой QUEST / "quest" в имени)
     local npcs = Workspace:FindFirstChild("NPCs")
     if not npcs then return false end
 
-    local list = {}
+    local function isQuestGiver(npc)
+        if npc.Name:lower():find("quest") then return true end
+        for _, d in ipairs(npc:GetDescendants()) do
+            if d:IsA("BillboardGui") and d.Name:lower():find("quest") then return true end
+            if (d:IsA("TextLabel") or d:IsA("TextButton")) and d.Text:upper():find("QUEST") then
+                return true
+            end
+        end
+        return false
+    end
+
+    local marked, all = {}, {}
     for _, n in ipairs(npcs:GetChildren()) do
         local p = n:IsA("Model") and (n.PrimaryPart or n:FindFirstChild("HumanoidRootPart"))
         if p then
-            list[#list + 1] = { p = p, d = (p.Position - center).Magnitude }
+            local item = { npc = n, p = p, d = (p.Position - center).Magnitude }
+            all[#all + 1] = item
+            if isQuestGiver(n) then marked[#marked + 1] = item end
         end
     end
-    table.sort(list, function(a, b) return a.d < b.d end)
+    local byDist = function(a, b) return a.d < b.d end
+    table.sort(marked, byDist)
+    table.sort(all, byDist)
 
-    for i = 1, math.min(6, #list) do
+    -- только помеченные квестовые NPC (максимум 2); если меток нет - один ближайший
+    local source = (#marked > 0) and marked or all
+    local limit = (#marked > 0) and 2 or 1
+    local candidates = {}
+    for i = 1, math.min(limit, #source) do candidates[i] = source[i] end
+
+    for _, c in ipairs(candidates) do
         if abort() then return false end
-        flyToPos(list[i].p.Position + Vector3.new(0, 3, 0), abort)
-        if try() then return true end
+        statusText = "Квест у NPC: " .. c.npc.Name
+        flyToPos(c.p.Position + Vector3.new(0, 3, 0), abort)
+        if try() then
+            QUEST_NPC_POS[q.name] = c.p.Position -- запоминаем: дальше летим сразу к нему
+            return true
+        end
     end
 
+    if candidates[1] then
+        notify("Квест не взят. Пробовал NPC: " .. candidates[1].npc.Name)
+    end
     return false
 end
 
