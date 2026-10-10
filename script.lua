@@ -1,38 +1,47 @@
--- VitaHub | Blox Fruits (v4.1) (запускать через executor)
--- F2 ESP фруктов | F3 полёт к фрукту
--- F4 автофарм по уровню | F5 смена оружия | F6 fast attack | RightShift скрыть/показать GUI
+-- VitaHub | Blox Fruits (v5) (запускать через executor)
+-- Вкладки: Combat / Visuals / Misc
+-- F2 ESP фруктов | F3 полёт к фрукту | F4 автофарм | F5 смена оружия | F6 fast attack
+-- RightShift скрыть/показать GUI
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UIS = game:GetService("UserInputService")
 local VirtualUser = game:GetService("VirtualUser")
-local VIM = game:GetService("VirtualInputManager")
 local Workspace = game:GetService("Workspace")
 local TweenService = game:GetService("TweenService")
+local Lighting = game:GetService("Lighting")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local player = Players.LocalPlayer
 
 -- ===== Настройки =====
 local FLY_SPEED = 250        -- скорость полёта (студов/сек), меньше = безопаснее
-local FARM_HEIGHT = 10       -- высота зависания над мобом (выше = безопаснее, но клики достают хуже)
+local FARM_HEIGHT = 10       -- высота зависания над мобом
 local FARM_APPROACH = 80     -- дальше этого расстояния сначала подлетаем
 local FAST_RANGE = 60        -- радиус, в котором fast attack бьёт мобов
 local MOB_LEVEL_SLACK = 5    -- насколько уровень моба может быть выше моего
 local WEAPONS = {"Melee", "Sword", "Blox Fruit"}
-local FRUIT_KEYS = {Enum.KeyCode.Z, Enum.KeyCode.X, Enum.KeyCode.C, Enum.KeyCode.V}
+local BLUR_SIZE = 14         -- сила размытия фона за меню (0 = выкл)
 
 -- Ручной выбор квеста (если авто-выбор ошибается). Пример:
 -- local FORCE_QUEST = {name = "ZombieQuest", idx = 2}
--- Имя и номер смотри в консоли executor: скрипт печатает их при выборе квеста.
 local FORCE_QUEST = nil
 -- =====================
+
+-- ===== Палитра =====
+local ACCENT   = Color3.fromRGB(139, 92, 246)
+local ACCENT2  = Color3.fromRGB(236, 72, 153)
+local TEXT     = Color3.fromRGB(240, 240, 250)
+local MUTED    = Color3.fromRGB(170, 172, 200)
+local RED      = Color3.fromRGB(220, 70, 90)
+local GOOD     = Color3.fromRGB(52, 199, 120)
 
 local alive = true           -- false после "Убить GUI": все циклы завершаются
 local connections = {}
 local function track(c) table.insert(connections, c) return c end
 
 local weaponIndex = 1
-local farmMobName = nil  -- имя моба текущего квеста (fast attack бьёт только его)
+local farmMobName = nil  -- имя моба, которого бьёт fast attack во время фарма
 
 -- имя моба без суффикса вида " [Lv. 5]"
 local function baseName(n)
@@ -49,12 +58,22 @@ local flying = false
 local currentTween
 local noclipConn
 local statusText = "Ожидание"
+local gachaStatus = "-"
 
 local state = {
     fastAttack = false,
-    esp = false,
+    espFruits = false,
+    espPlayers = false,
     autoFarm = false,
+    autoFactory = false,
+    autoStats = false,
+    autoGacha = false,
+    blur = true,
 }
+
+local STAT_NAMES = {"Melee", "Defense", "Sword", "Gun", "Demon Fruit"}
+local STAT_LABELS = {"Melee", "Defense", "Sword", "Gun", "Fruit"}
+local statIndex = 1
 
 local refreshGui = function() end
 
@@ -71,13 +90,33 @@ local function getRoot()
     return char and char:FindFirstChild("HumanoidRootPart")
 end
 
+local function getHumanoid()
+    local char = player.Character
+    return char and char:FindFirstChildOfClass("Humanoid")
+end
+
+local function getPlayerLevel()
+    local ok, lvl = pcall(function() return player.Data.Level.Value end)
+    return ok and lvl or 1
+end
+
+local function getPoints()
+    local ok, pts = pcall(function() return player.Data.Points.Value end)
+    return ok and pts or 0
+end
+
+local function getCommF()
+    local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+    return remotes and remotes:FindFirstChild("CommF_")
+end
+
 -- Анти-AFK
 track(player.Idled:Connect(function()
     VirtualUser:CaptureController()
     VirtualUser:ClickButton2(Vector2.new())
 end))
 
--- ================= Фрукты =================
+-- ================= Фрукты: ESP =================
 local function getFruits()
     local fruits = {}
     for _, obj in ipairs(Workspace:GetChildren()) do
@@ -88,7 +127,7 @@ local function getFruits()
     return fruits
 end
 
-local function updateESP()
+local function updateFruitESP()
     for _, fruit in ipairs(getFruits()) do
         local handle = fruit:FindFirstChild("Handle")
         if handle and not handle:FindFirstChild("FruitESP") then
@@ -111,11 +150,73 @@ local function updateESP()
     end
 end
 
-local function clearESP()
+local function clearFruitESP()
     for _, fruit in ipairs(getFruits()) do
         local handle = fruit:FindFirstChild("Handle")
-        local esp = handle and handle:FindFirstChild("FruitESP")
-        if esp then esp:Destroy() end
+        local e = handle and handle:FindFirstChild("FruitESP")
+        if e then e:Destroy() end
+    end
+end
+
+-- ================= Игроки: ESP =================
+local function updatePlayerESP()
+    local myRoot = getRoot()
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= player then
+            local ch = plr.Character
+            local hr = ch and ch:FindFirstChild("HumanoidRootPart")
+            if ch and hr then
+                if not ch:FindFirstChild("VH_Highlight") then
+                    local h = Instance.new("Highlight")
+                    h.Name = "VH_Highlight"
+                    h.FillColor = ACCENT2
+                    h.FillTransparency = 0.7
+                    h.OutlineColor = Color3.new(1, 1, 1)
+                    h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+                    h.Parent = ch
+                end
+
+                local g = hr:FindFirstChild("VH_PlayerESP")
+                if not g then
+                    g = Instance.new("BillboardGui")
+                    g.Name = "VH_PlayerESP"
+                    g.Adornee = hr
+                    g.Size = UDim2.new(0, 140, 0, 34)
+                    g.StudsOffset = Vector3.new(0, 3.5, 0)
+                    g.AlwaysOnTop = true
+
+                    local l = Instance.new("TextLabel")
+                    l.Name = "L"
+                    l.Size = UDim2.new(1, 0, 1, 0)
+                    l.BackgroundTransparency = 1
+                    l.TextColor3 = Color3.new(1, 1, 1)
+                    l.TextStrokeTransparency = 0.3
+                    l.Font = Enum.Font.GothamBold
+                    l.TextSize = 13
+                    l.Parent = g
+                    g.Parent = hr
+                end
+
+                local l = g:FindFirstChild("L")
+                if l then
+                    local d = myRoot and (hr.Position - myRoot.Position).Magnitude or 0
+                    l.Text = ("%s\n%d m"):format(plr.DisplayName, d)
+                end
+            end
+        end
+    end
+end
+
+local function clearPlayerESP()
+    for _, plr in ipairs(Players:GetPlayers()) do
+        local ch = plr.Character
+        if ch then
+            local h = ch:FindFirstChild("VH_Highlight")
+            if h then h:Destroy() end
+            local hr = ch:FindFirstChild("HumanoidRootPart")
+            local g = hr and hr:FindFirstChild("VH_PlayerESP")
+            if g then g:Destroy() end
+        end
     end
 end
 
@@ -136,8 +237,8 @@ local function flyToNearestFruit()
         notify("Полёт отменён")
         return
     end
-    if state.autoFarm then
-        notify("Сначала выключи автофарм")
+    if state.autoFarm or state.autoFactory then
+        notify("Сначала выключи автофарм / Factory")
         return
     end
 
@@ -187,12 +288,11 @@ local function flyToNearestFruit()
     currentTween:Play()
 end
 
--- ================= Клик-цикл (fast attack, из старого скрипта) =================
--- Этот же клик-цикл работает для Fast Attack и для Автофарма (любое оружие, включая фрукт)
+-- ================= Клик-цикл =================
+-- Работает для Fast Attack, Автофарма и Factory (любое оружие, включая фрукт)
 task.spawn(function()
     while alive do
-        local farmClick = state.autoFarm
-        if state.fastAttack or farmClick then
+        if state.fastAttack or state.autoFarm or state.autoFactory then
             VirtualUser:CaptureController()
             VirtualUser:Button1Down(Vector2.new(1280, 672))
             task.wait(0.05)
@@ -202,9 +302,8 @@ task.spawn(function()
     end
 end)
 
--- ================= Fast Attack через сеть (из найденного скрипта) =================
+-- ================= Fast Attack через сеть =================
 -- Зависит от версии игры: если ремоутов нет, остаётся только клик-цикл выше.
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RegisterAttack, RegisterHit
 local netWarned = false
 
@@ -232,13 +331,15 @@ local function netAttack()
         return
     end
 
+    local onlyMob = (state.autoFarm or state.autoFactory) and farmMobName or nil
+
     local list = {}
     for _, e in ipairs(folder:GetChildren()) do
         local hum = e:FindFirstChildOfClass("Humanoid")
         local er = e:FindFirstChild("HumanoidRootPart")
         if hum and er and hum.Health > 0
             and (er.Position - root.Position).Magnitude <= FAST_RANGE
-            and (not (state.autoFarm and farmMobName) or baseName(e.Name) == farmMobName) then
+            and (not onlyMob or baseName(e.Name) == onlyMob) then
             list[#list + 1] = {e, er}
         end
     end
@@ -249,10 +350,9 @@ local function netAttack()
     RegisterHit:FireServer(first, list)
 end
 
--- Работает при включённом Fast Attack и всегда во время автофарма
 task.spawn(function()
     while alive do
-        if state.fastAttack or state.autoFarm then
+        if state.fastAttack or state.autoFarm or state.autoFactory then
             pcall(netAttack)
         end
         task.wait(0.05)
@@ -262,16 +362,6 @@ end)
 -- ================= Автофарм по квестам =================
 local farmNoclip
 local farmTween
-
-local function getHumanoid()
-    local char = player.Character
-    return char and char:FindFirstChildOfClass("Humanoid")
-end
-
-local function getPlayerLevel()
-    local ok, lvl = pcall(function() return player.Data.Level.Value end)
-    return ok and lvl or 1
-end
 
 local function equipWeapon()
     local char = player.Character
@@ -351,11 +441,6 @@ local function flyToPos(dest, abort)
 end
 
 -- ===== Квесты =====
-local function getCommF()
-    local remotes = ReplicatedStorage:FindFirstChild("Remotes")
-    return remotes and remotes:FindFirstChild("CommF_")
-end
-
 local QuestData
 local function loadQuests()
     if QuestData then return QuestData end
@@ -366,9 +451,7 @@ local function loadQuests()
     return QuestData
 end
 
--- Споуны моба. Порядок поиска:
--- 1) точное совпадение имени, 2) "мягкое" совпадение (пробелы/регистр/цифры),
--- 3) запасной вариант: позиции уже загруженных мобов с таким именем.
+-- Споуны моба: точное имя -> "мягкое" имя -> позиции живых мобов
 local function getSpawnPositions(mob)
     local list = {}
     local origin = Workspace:FindFirstChild("_WorldOrigin")
@@ -414,13 +497,11 @@ local function getMobLevel(mob)
     return lv and tonumber(lv) or nil
 end
 
--- Моб подходит, если его уровень не сильно выше моего (или уровень не определился)
 local function mobLevelOk(mob)
     local ml = getMobLevel(mob)
     return not ml or ml <= getPlayerLevel() + MOB_LEVEL_SLACK
 end
 
--- Уровень уже загруженных мобов с таким именем (nil, если их нет рядом)
 local function liveMobLevel(mobName)
     local folder = Workspace:FindFirstChild("Enemies")
     if not folder then return nil end
@@ -433,7 +514,6 @@ local function liveMobLevel(mobName)
     return nil
 end
 
--- Почему квест нельзя взять (nil = можно)
 local function skipReason(c, lvl)
     if #getSpawnPositions(c.mob) == 0 then
         return "нет споунов моба " .. c.mob
@@ -447,16 +527,12 @@ end
 
 local warnedSkips = {}
 
--- Квест с самым высоким требованием, которое не выше моего уровня,
--- и только такой, чьи мобы реально есть в текущем море.
--- Если самый подходящий по уровню квест пропущен, пишет причину.
 local function pickQuest()
     local quests = loadQuests()
     if not quests then return nil end
 
     local lvl = getPlayerLevel()
 
-    -- ручной выбор
     if FORCE_QUEST then
         local tier = quests[FORCE_QUEST.name] and quests[FORCE_QUEST.name][FORCE_QUEST.idx]
         if type(tier) == "table" and type(tier.Task) == "table" then
@@ -469,7 +545,6 @@ local function pickQuest()
         end
     end
 
-    -- все квесты, доступные по уровню (боссов с задачей "убить 1" пропускаем)
     local cands = {}
     for qName, tiers in pairs(quests) do
         if type(tiers) == "table" then
@@ -491,7 +566,6 @@ local function pickQuest()
         end
     end
 
-    -- сначала самые высокие по требованию
     table.sort(cands, function(a, b)
         if a.req ~= b.req then return a.req > b.req end
         return tostring(a.name) .. ":" .. tostring(a.idx) < tostring(b.name) .. ":" .. tostring(b.idx)
@@ -501,7 +575,6 @@ local function pickQuest()
     for _, c in ipairs(cands) do
         local why = skipReason(c, lvl)
         if not why then
-            -- объясняем, почему не взяли квест повыше
             local top = skipped[1]
             if top and lvl - c.req >= 25 then
                 local key = tostring(top.name) .. ":" .. tostring(top.idx)
@@ -528,14 +601,13 @@ local function questActive()
     return ok and vis == true
 end
 
--- Упоминается ли моб в тексте активного квеста.
--- true / false, а если прочитать текст квеста не удалось - nil.
+-- Упоминается ли моб в тексте активного квеста (true/false, nil - не удалось прочитать)
 local function questMentionsMob(mob)
     local ok, qgui = pcall(function() return player.PlayerGui.Main.Quest end)
     if not ok or not qgui then return nil end
 
     local want = mob:lower()
-    local stem = want:gsub("y$", "") -- Spy -> Spies
+    local stem = want:gsub("y$", "")
     local sawText = false
 
     for _, d in ipairs(qgui:GetDescendants()) do
@@ -550,18 +622,16 @@ local function questMentionsMob(mob)
     return sawText and false or nil
 end
 
--- Гарантирует, что активен ИМЕННО нужный квест:
--- старый/чужой квест отменяется, потом берётся нужный.
+-- Гарантирует, что активен ИМЕННО нужный квест
 local function ensureQuest(q, abort)
     local comm = getCommF()
     if not comm then return false end
 
     if questActive() then
         if questMentionsMob(q.mob) == true then
-            return true -- уже нужный квест
+            return true
         end
 
-        -- висит квест с прошлого раза -> отменяем
         for _ = 1, 3 do
             if abort() then return false end
             pcall(function() comm:InvokeServer("AbandonQuest") end)
@@ -600,14 +670,14 @@ local function getNearestQuestMob(mobName)
     return best
 end
 
--- Висим над мобом, пока он жив и квест не завершён
+-- Висим над мобом, пока он жив и abort() не вернул true
 local function attackMob(mob, q, abort)
     local mroot = mob:FindFirstChild("HumanoidRootPart")
     local hum = mob:FindFirstChildOfClass("Humanoid")
     if not mroot or not hum then return end
 
     statusText = ("%s | игрок %d | моб %s | %s x%d"):format(
-        q.mob, getPlayerLevel(), tostring(getMobLevel(mob) or "?"), q.name, q.count)
+        q.mob, getPlayerLevel(), tostring(getMobLevel(mob) or "?"), tostring(q.name), q.count)
 
     local r = getRoot()
     if r and (mroot.Position - r.Position).Magnitude > FARM_APPROACH then
@@ -618,7 +688,7 @@ local function attackMob(mob, q, abort)
     local conn
     conn = RunService.Heartbeat:Connect(function()
         local root = getRoot()
-        if alive and state.autoFarm and root and mroot.Parent and hum.Health > 0 then
+        if alive and not abort() and root and mroot.Parent and hum.Health > 0 then
             local pos = mroot.Position + Vector3.new(0, FARM_HEIGHT, 0)
             root.CFrame = CFrame.new(pos, mroot.Position)
         else
@@ -633,13 +703,10 @@ local function attackMob(mob, q, abort)
     return hum.Health <= 0
 end
 
--- Квест берётся удалённым вызовом (без полётов к NPC) при старте фарма
--- и снова каждый раз, когда прошлый завершён. Мобы бьются сразу.
 local function farmCycle()
     local function on() return alive and state.autoFarm end
     local abort = function() return not on() end
 
-    -- каждый цикл заново выбираем квест по ТЕКУЩЕМУ уровню (без кэша)
     local q = pickQuest()
     if not q then
         notify("Не нашёл квест под твой уровень, автофарм выключен")
@@ -651,7 +718,6 @@ local function farmCycle()
     print(("[VitaHub] квест %s:%s, моб %s x%d, req %d, игрок lvl %d"):format(
         tostring(q.name), tostring(q.idx), q.mob, q.count, q.req, getPlayerLevel()))
 
-    -- ближайший к нам кластер спаунов этого моба
     local root = getRoot()
     if not root then return false end
     local spawns = getSpawnPositions(q.mob)
@@ -667,12 +733,11 @@ local function farmCycle()
         end
     end
 
-    -- берём квест: старый отменяем, нужный берём
     statusText = "Беру квест: " .. tostring(q.name)
     if not ensureQuest(q, abort) then
         notify("Квест не взялся: " .. tostring(q.name) .. ", бью мобов без него")
     end
-    local detect = questActive()  -- работает ли определение статуса квеста
+    local detect = questActive()
     notify(("Квест %s (от lvl %d), мобы %s x%d, игрок lvl %d"):format(
         tostring(q.name), q.req, q.mob, q.count, getPlayerLevel()))
 
@@ -684,24 +749,21 @@ local function farmCycle()
         local hum = getHumanoid()
         if not getRoot() or not hum or hum.Health <= 0 then return true end
 
-        -- прошлый квест завершён -> берём новый
         if detect then
             if not questActive() and os.clock() - lastTry > 2 then
                 lastTry = os.clock()
                 ensureQuest(q, abort)
             end
         elseif kills >= q.count then
-            -- статус квеста не определяется: считаем убийства сами
             kills = 0
             ensureQuest(q, abort)
         end
 
-        -- раз в 5 сек проверяем, не пора ли сменить квест из-за уровня
         if os.clock() - lastPick > 5 then
             lastPick = os.clock()
             local nq = pickQuest()
             if nq and nq.req > q.req then
-                return true -- новый цикл возьмёт новый квест
+                return true
             end
         end
 
@@ -714,7 +776,6 @@ local function farmCycle()
         else
             statusText = "Жду мобов: " .. q.mob
             if os.clock() - lastSeen > 3 then
-                -- мобов нет: летим к другому споуну, чтобы они появились
                 spIdx = spIdx % #cluster + 1
                 flyToPos(cluster[spIdx] + Vector3.new(0, FARM_HEIGHT, 0), abort)
                 lastSeen = os.clock()
@@ -738,9 +799,13 @@ task.spawn(function()
                 if not ok and alive and state.autoFarm then task.wait(2) end
             end
         else
-            statusText = "Автофарм выкл"
-            farmMobName = nil
-            stopFarmPhysics()
+            if not state.autoFactory then
+                if not state.autoFarm and not state.autoStats and not state.autoGacha then
+                    statusText = "Автофарм выкл"
+                end
+                farmMobName = nil
+                stopFarmPhysics()
+            end
             task.wait(0.3)
         end
         task.wait()
@@ -748,15 +813,133 @@ task.spawn(function()
     stopFarmPhysics()
 end)
 
+-- ================= Auto Factory Core (Sea 2) =================
+-- Core ищется среди врагов (Workspace.Enemies.Core). Работает, когда Factory активна.
+local function getCore()
+    local folder = Workspace:FindFirstChild("Enemies")
+    local core = folder and folder:FindFirstChild("Core")
+    if core and core:FindFirstChild("HumanoidRootPart") then
+        local hum = core:FindFirstChildOfClass("Humanoid")
+        if hum and hum.Health > 0 then return core end
+    end
+    return nil
+end
+
+task.spawn(function()
+    while alive do
+        if state.autoFactory and not state.autoFarm then
+            local hum = getHumanoid()
+            local core = getCore()
+            if hum and hum.Health > 0 and core then
+                farmMobName = "Core"
+                equipWeapon()
+                attackMob(core, { mob = "Core", name = "Factory", count = 1 }, function()
+                    return not (alive and state.autoFactory) or state.autoFarm
+                end)
+            else
+                statusText = "Factory: жду Core (Sea 2)"
+                if farmMobName == "Core" then farmMobName = nil end
+                task.wait(2)
+            end
+        else
+            task.wait(0.5)
+        end
+        task.wait()
+    end
+end)
+
+-- ================= Статы =================
+task.spawn(function()
+    while alive do
+        if state.autoStats then
+            local pts = getPoints()
+            if pts > 0 then
+                local comm = getCommF()
+                if comm then
+                    pcall(function() comm:InvokeServer("AddPoint", STAT_NAMES[statIndex], pts) end)
+                end
+            end
+            task.wait(0.5)
+        else
+            task.wait(0.5)
+        end
+    end
+end)
+
+-- ================= Gacha (ролл фруктов) =================
+task.spawn(function()
+    while alive do
+        if state.autoGacha then
+            local comm = getCommF()
+            if comm then
+                local ok, res = pcall(function() return comm:InvokeServer("Cousin", "Buy") end)
+                if not ok then
+                    gachaStatus = "ошибка вызова"
+                elseif type(res) == "table" then
+                    gachaStatus = "получено (см. инвентарь)"
+                else
+                    gachaStatus = tostring(res)
+                end
+            else
+                gachaStatus = "CommF_ не найден"
+            end
+            task.wait(3)
+        else
+            task.wait(0.5)
+        end
+    end
+end)
+
+-- ================= Следующий остров (по ближайшему квесту) =================
+local function seaForLevel(l)
+    if l < 700 then return "Sea 1" end
+    if l < 1500 then return "Sea 2" end
+    return "Sea 3"
+end
+
+local nextCacheLvl, nextCacheText
+local function nextIslandText(lvl)
+    if nextCacheLvl == lvl and nextCacheText then return nextCacheText end
+
+    local quests = loadQuests()
+    if not quests then return "-" end
+
+    local nextReq
+    for _, tiers in pairs(quests) do
+        if type(tiers) == "table" then
+            for _, d in pairs(tiers) do
+                if type(d) == "table" and type(d.LevelReq) == "number" and type(d.Task) == "table"
+                    and d.LevelReq > lvl and (not nextReq or d.LevelReq < nextReq) then
+                    local cnt
+                    for _, c in pairs(d.Task) do cnt = c end
+                    if type(cnt) == "number" and cnt > 1 then
+                        nextReq = d.LevelReq
+                    end
+                end
+            end
+        end
+    end
+
+    nextCacheLvl = lvl
+    nextCacheText = nextReq and (seaForLevel(nextReq) .. " • Lv " .. nextReq) or "максимум"
+    return nextCacheText
+end
+
 -- ================= Действия =================
 local function toggleFast()
     state.fastAttack = not state.fastAttack
     refreshGui()
 end
 
-local function toggleESP()
-    state.esp = not state.esp
-    if not state.esp then clearESP() end
+local function toggleFruitESP()
+    state.espFruits = not state.espFruits
+    if not state.espFruits then clearFruitESP() end
+    refreshGui()
+end
+
+local function togglePlayerESP()
+    state.espPlayers = not state.espPlayers
+    if not state.espPlayers then clearPlayerESP() end
     refreshGui()
 end
 
@@ -764,30 +947,44 @@ local function toggleFarm()
     if flying then stopFlying() end
     state.autoFarm = not state.autoFarm
     if state.autoFarm then
-        warnedSkips = {} -- при каждом включении заново объясняем пропуски квестов
+        warnedSkips = {}
     end
+    refreshGui()
+end
+
+local function toggleFactory()
+    if flying then stopFlying() end
+    state.autoFactory = not state.autoFactory
+    if not state.autoFactory then
+        if farmMobName == "Core" then farmMobName = nil end
+        if not state.autoFarm then stopFarmPhysics() end
+    end
+    refreshGui()
+end
+
+local function toggleStats()
+    state.autoStats = not state.autoStats
+    refreshGui()
+end
+
+local function toggleGacha()
+    state.autoGacha = not state.autoGacha
     refreshGui()
 end
 
 local function setWeapon(i)
     weaponIndex = i
-    local char = player.Character
-    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    local hum = getHumanoid()
     if hum then hum:UnequipTools() end
     refreshGui()
 end
 
--- ================= GUI (VitaHub) =================
-local ACCENT   = Color3.fromRGB(139, 92, 246)
-local ACCENT2  = Color3.fromRGB(236, 72, 153)
-local BG       = Color3.fromRGB(16, 16, 22)
-local CARD     = Color3.fromRGB(30, 30, 42)
-local TEXT     = Color3.fromRGB(235, 235, 245)
-local MUTED    = Color3.fromRGB(140, 140, 165)
-local OFFPILL  = Color3.fromRGB(62, 62, 80)
-local RED      = Color3.fromRGB(200, 62, 78)
-local GOOD     = Color3.fromRGB(52, 199, 120)
+local function setStat(i)
+    statIndex = i
+    refreshGui()
+end
 
+-- ================= GUI: Liquid Glass =================
 local gui = Instance.new("ScreenGui")
 gui.Name = "VitaHubGui"
 gui.ResetOnSpawn = false
@@ -797,7 +994,7 @@ if not okParent or not gui.Parent then gui.Parent = player:WaitForChild("PlayerG
 
 local function corner(obj, r)
     local c = Instance.new("UICorner")
-    c.CornerRadius = r or UDim.new(0, 8)
+    c.CornerRadius = r or UDim.new(0, 10)
     c.Parent = obj
     return c
 end
@@ -810,35 +1007,90 @@ local function brandGradient(obj)
     return g
 end
 
--- Главное окно
-local frame = Instance.new("Frame")
-frame.Name = "Main"
-frame.Size = UDim2.new(0, 250, 0, 0)
-frame.AutomaticSize = Enum.AutomaticSize.Y
-frame.Position = UDim2.new(0, 20, 0.5, -230)
-frame.BackgroundColor3 = BG
-frame.BorderSizePixel = 0
-frame.Active = true
-frame.Parent = gui
-corner(frame, UDim.new(0, 12))
+-- "стеклянный" элемент: белая полупрозрачная заливка + тонкая светлая обводка
+local function glass(obj, transp, strokeT)
+    obj.BackgroundColor3 = Color3.new(1, 1, 1)
+    obj.BackgroundTransparency = transp or 0.9
+    obj.BorderSizePixel = 0
+    local s = Instance.new("UIStroke")
+    s.Color = Color3.new(1, 1, 1)
+    s.Transparency = strokeT or 0.8
+    s.Thickness = 1
+    s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    s.Parent = obj
+    return s
+end
 
-local stroke = Instance.new("UIStroke")
-stroke.Color = ACCENT
-stroke.Thickness = 1.5
-stroke.Transparency = 0.35
-stroke.Parent = frame
+local W, H = 600, 420
 
-local pad = Instance.new("UIPadding")
-pad.PaddingTop = UDim.new(0, 10)
-pad.PaddingBottom = UDim.new(0, 10)
-pad.PaddingLeft = UDim.new(0, 10)
-pad.PaddingRight = UDim.new(0, 10)
-pad.Parent = frame
+local main = Instance.new("Frame")
+main.Name = "Main"
+main.Size = UDim2.new(0, W, 0, H)
+main.Position = UDim2.new(0.5, -W / 2, 0.5, -H / 2)
+main.BackgroundColor3 = Color3.new(1, 1, 1)
+main.BackgroundTransparency = 0.22
+main.BorderSizePixel = 0
+main.Active = true
+main.Parent = gui
+corner(main, UDim.new(0, 20))
 
-local list = Instance.new("UIListLayout")
-list.Padding = UDim.new(0, 6)
-list.SortOrder = Enum.SortOrder.LayoutOrder
-list.Parent = frame
+local mainGrad = Instance.new("UIGradient")
+mainGrad.Color = ColorSequence.new(Color3.fromRGB(76, 64, 148), Color3.fromRGB(16, 18, 38))
+mainGrad.Rotation = 55
+mainGrad.Parent = main
+
+-- светящаяся обводка: ярче по углам, слабее посередине
+local mainStroke = Instance.new("UIStroke")
+mainStroke.Color = Color3.new(1, 1, 1)
+mainStroke.Thickness = 1.6
+mainStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+mainStroke.Parent = main
+
+local strokeGrad = Instance.new("UIGradient")
+strokeGrad.Rotation = 45
+strokeGrad.Transparency = NumberSequence.new({
+    NumberSequenceKeypoint.new(0, 0.1),
+    NumberSequenceKeypoint.new(0.5, 0.88),
+    NumberSequenceKeypoint.new(1, 0.2),
+})
+strokeGrad.Parent = mainStroke
+
+-- блик сверху (имитация отражения на стекле)
+local sheen = Instance.new("Frame")
+sheen.Name = "Sheen"
+sheen.Size = UDim2.new(1, 0, 0.42, 0)
+sheen.BackgroundColor3 = Color3.new(1, 1, 1)
+sheen.BorderSizePixel = 0
+sheen.Active = false
+sheen.Parent = main
+corner(sheen, UDim.new(0, 20))
+
+local sheenGrad = Instance.new("UIGradient")
+sheenGrad.Rotation = 90
+sheenGrad.Transparency = NumberSequence.new({
+    NumberSequenceKeypoint.new(0, 0.84),
+    NumberSequenceKeypoint.new(1, 1),
+})
+sheenGrad.Parent = sheen
+
+-- Размытие мира за меню (интерфейс остаётся чётким)
+local blur = Instance.new("BlurEffect")
+blur.Name = "VH_Blur"
+blur.Size = 0
+pcall(function() blur.Parent = Lighting end)
+
+local function applyBlur()
+    local target = (state.blur and main.Visible) and BLUR_SIZE or 0
+    pcall(function()
+        TweenService:Create(blur, TweenInfo.new(0.25), {Size = target}):Play()
+    end)
+end
+
+local function toggleBlur()
+    state.blur = not state.blur
+    applyBlur()
+    refreshGui()
+end
 
 -- Универсальное перетаскивание. Сдвиг меньше 6px считается кликом.
 local function makeDraggable(handle, target, onClick)
@@ -874,15 +1126,15 @@ local function makeDraggable(handle, target, onClick)
     end))
 end
 
--- Шапка: название и подпись (за неё окно таскается)
+-- ===== Шапка =====
 local header = Instance.new("Frame")
-header.Size = UDim2.new(1, 0, 0, 46)
+header.Size = UDim2.new(1, 0, 0, 56)
 header.BackgroundTransparency = 1
-header.LayoutOrder = 1
-header.Parent = frame
+header.Parent = main
 
 local titleLbl = Instance.new("TextLabel")
-titleLbl.Size = UDim2.new(1, 0, 0, 28)
+titleLbl.Position = UDim2.new(0, 20, 0, 8)
+titleLbl.Size = UDim2.new(0, 220, 0, 28)
 titleLbl.BackgroundTransparency = 1
 titleLbl.Text = "VitaHub"
 titleLbl.TextColor3 = Color3.new(1, 1, 1)
@@ -893,19 +1145,163 @@ titleLbl.Parent = header
 brandGradient(titleLbl)
 
 local subLbl = Instance.new("TextLabel")
-subLbl.Position = UDim2.new(0, 0, 0, 28)
-subLbl.Size = UDim2.new(1, 0, 0, 16)
+subLbl.Position = UDim2.new(0, 20, 0, 36)
+subLbl.Size = UDim2.new(0, 220, 0, 14)
 subLbl.BackgroundTransparency = 1
-subLbl.Text = "Blox Fruits  •  v4.1"
+subLbl.Text = "Blox Fruits  •  v5"
 subLbl.TextColor3 = MUTED
 subLbl.Font = Enum.Font.Gotham
 subLbl.TextSize = 12
 subLbl.TextXAlignment = Enum.TextXAlignment.Left
 subLbl.Parent = header
 
-makeDraggable(header, frame)
+makeDraggable(header, main)
 
-local function sectionLabel(text, order)
+local function windowButton(text, x, tint, callback)
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.new(0, 28, 0, 28)
+    b.Position = UDim2.new(1, x, 0, 14)
+    b.Text = text
+    b.TextColor3 = Color3.new(1, 1, 1)
+    b.Font = Enum.Font.GothamBold
+    b.TextSize = 15
+    b.AutoButtonColor = false
+    b.Parent = header
+    glass(b, 0.88, 0.7)
+    if tint then b.BackgroundColor3 = tint b.BackgroundTransparency = 0.45 end
+    corner(b, UDim.new(1, 0))
+    b.Activated:Connect(callback)
+    return b
+end
+
+-- ===== Плашки: уровень и следующий остров =====
+local function infoPill(x, w)
+    local pill = Instance.new("Frame")
+    pill.Position = UDim2.new(0, x, 0, 58)
+    pill.Size = UDim2.new(0, w, 0, 26)
+    pill.Parent = main
+    glass(pill, 0.88, 0.72)
+    corner(pill, UDim.new(0, 13))
+
+    local l = Instance.new("TextLabel")
+    l.Size = UDim2.new(1, -20, 1, 0)
+    l.Position = UDim2.new(0, 10, 0, 0)
+    l.BackgroundTransparency = 1
+    l.TextColor3 = TEXT
+    l.Font = Enum.Font.GothamMedium
+    l.TextSize = 13
+    l.TextXAlignment = Enum.TextXAlignment.Left
+    l.TextTruncate = Enum.TextTruncate.AtEnd
+    l.Text = ""
+    l.Parent = pill
+    return l
+end
+
+local lvlLabel = infoPill(16, 170)
+local nextLabel = infoPill(194, W - 194 - 16)
+
+-- ===== Боковая панель вкладок =====
+local sidebar = Instance.new("Frame")
+sidebar.Position = UDim2.new(0, 14, 0, 98)
+sidebar.Size = UDim2.new(0, 128, 0, H - 98 - 14)
+sidebar.BackgroundTransparency = 1
+sidebar.Parent = main
+
+local updaters = {}
+local orders = {}
+local function nextOrder(p)
+    orders[p] = (orders[p] or 0) + 1
+    return orders[p]
+end
+
+local tabNames = {"Combat", "Visuals", "Misc"}
+local pages = {}
+local tabButtons = {}
+local currentTab = "Combat"
+
+for i, name in ipairs(tabNames) do
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.new(1, 0, 0, 38)
+    b.Position = UDim2.new(0, 0, 0, (i - 1) * 46)
+    b.Text = name
+    b.TextColor3 = TEXT
+    b.Font = Enum.Font.GothamBold
+    b.TextSize = 14
+    b.AutoButtonColor = false
+    b.Parent = sidebar
+    glass(b, 0.9, 0.8)
+    corner(b, UDim.new(0, 12))
+    tabButtons[name] = b
+end
+
+local hint = Instance.new("TextLabel")
+hint.Position = UDim2.new(0, 0, 1, -34)
+hint.Size = UDim2.new(1, 0, 0, 32)
+hint.BackgroundTransparency = 1
+hint.Text = "RightShift -\nскрыть меню"
+hint.TextColor3 = MUTED
+hint.Font = Enum.Font.Gotham
+hint.TextSize = 11
+hint.TextXAlignment = Enum.TextXAlignment.Left
+hint.Parent = sidebar
+
+-- ===== Страницы =====
+local CONTENT_X, CONTENT_Y = 152, 98
+local CONTENT_W = W - CONTENT_X - 14
+local CONTENT_H = H - CONTENT_Y - 14 - 34
+
+local function makePage(name)
+    local sf = Instance.new("ScrollingFrame")
+    sf.Name = name
+    sf.Position = UDim2.new(0, CONTENT_X, 0, CONTENT_Y)
+    sf.Size = UDim2.new(0, CONTENT_W, 0, CONTENT_H)
+    sf.BackgroundTransparency = 1
+    sf.BorderSizePixel = 0
+    sf.ScrollBarThickness = 3
+    sf.ScrollBarImageColor3 = ACCENT
+    sf.CanvasSize = UDim2.new(0, 0, 0, 0)
+    sf.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    sf.Visible = false
+    sf.Parent = main
+
+    local lay = Instance.new("UIListLayout")
+    lay.Padding = UDim.new(0, 8)
+    lay.SortOrder = Enum.SortOrder.LayoutOrder
+    lay.Parent = sf
+
+    local pd = Instance.new("UIPadding")
+    pd.PaddingRight = UDim.new(0, 6)
+    pd.PaddingBottom = UDim.new(0, 4)
+    pd.Parent = sf
+
+    pages[name] = sf
+    return sf
+end
+
+local combatPage = makePage("Combat")
+local visualsPage = makePage("Visuals")
+local miscPage = makePage("Misc")
+
+local function setTab(name)
+    currentTab = name
+    for n, p in pairs(pages) do p.Visible = (n == name) end
+    refreshGui()
+end
+
+for name, b in pairs(tabButtons) do
+    b.Activated:Connect(function() setTab(name) end)
+end
+
+table.insert(updaters, function()
+    for name, b in pairs(tabButtons) do
+        local sel = (name == currentTab)
+        b.BackgroundColor3 = sel and ACCENT or Color3.new(1, 1, 1)
+        b.BackgroundTransparency = sel and 0.15 or 0.9
+    end
+end)
+
+-- ===== Элементы интерфейса =====
+local function sectionLabel(parent, text)
     local l = Instance.new("TextLabel")
     l.Size = UDim2.new(1, 0, 0, 16)
     l.BackgroundTransparency = 1
@@ -914,29 +1310,26 @@ local function sectionLabel(text, order)
     l.Font = Enum.Font.GothamBold
     l.TextSize = 11
     l.TextXAlignment = Enum.TextXAlignment.Left
-    l.LayoutOrder = order
-    l.Parent = frame
+    l.LayoutOrder = nextOrder(parent)
+    l.Parent = parent
 end
 
--- Строка с ползунком-переключателем
-local rows = {}
-local function makeToggle(text, hotkey, order, getFn, callback)
+local function makeToggle(parent, text, hotkey, getFn, callback)
     local row = Instance.new("TextButton")
-    row.Size = UDim2.new(1, 0, 0, 34)
-    row.BackgroundColor3 = CARD
-    row.BorderSizePixel = 0
+    row.Size = UDim2.new(1, 0, 0, 40)
     row.Text = ""
     row.AutoButtonColor = false
-    row.LayoutOrder = order
-    row.Parent = frame
-    corner(row, UDim.new(0, 8))
+    row.LayoutOrder = nextOrder(parent)
+    row.Parent = parent
+    glass(row, 0.9, 0.8)
+    corner(row, UDim.new(0, 12))
 
     local label = Instance.new("TextLabel")
-    label.Position = UDim2.new(0, 12, 0, 0)
-    label.Size = UDim2.new(1, -68, 1, 0)
+    label.Position = UDim2.new(0, 14, 0, 0)
+    label.Size = UDim2.new(1, -76, 1, 0)
     label.BackgroundTransparency = 1
     label.RichText = true
-    label.Text = text .. '  <font color="#8c8ca5" size="11">' .. hotkey .. "</font>"
+    label.Text = text .. (hotkey ~= "" and ('  <font color="#9a9cc0" size="11">' .. hotkey .. "</font>") or "")
     label.TextColor3 = TEXT
     label.Font = Enum.Font.GothamMedium
     label.TextSize = 14
@@ -944,16 +1337,17 @@ local function makeToggle(text, hotkey, order, getFn, callback)
     label.Parent = row
 
     local pill = Instance.new("Frame")
-    pill.Size = UDim2.new(0, 38, 0, 20)
-    pill.Position = UDim2.new(1, -48, 0.5, -10)
-    pill.BackgroundColor3 = OFFPILL
+    pill.Size = UDim2.new(0, 40, 0, 22)
+    pill.Position = UDim2.new(1, -52, 0.5, -11)
+    pill.BackgroundColor3 = Color3.fromRGB(110, 112, 140)
+    pill.BackgroundTransparency = 0.4
     pill.BorderSizePixel = 0
     pill.Parent = row
     corner(pill, UDim.new(1, 0))
 
     local knob = Instance.new("Frame")
-    knob.Size = UDim2.new(0, 16, 0, 16)
-    knob.Position = UDim2.new(0, 2, 0.5, -8)
+    knob.Size = UDim2.new(0, 18, 0, 18)
+    knob.Position = UDim2.new(0, 2, 0.5, -9)
     knob.BackgroundColor3 = Color3.new(1, 1, 1)
     knob.BorderSizePixel = 0
     knob.Parent = pill
@@ -962,65 +1356,125 @@ local function makeToggle(text, hotkey, order, getFn, callback)
     row.Activated:Connect(callback)
 
     local info = TweenInfo.new(0.15, Enum.EasingStyle.Quad)
-    table.insert(rows, function()
+    table.insert(updaters, function()
         local on = getFn()
-        TweenService:Create(pill, info, {BackgroundColor3 = on and ACCENT or OFFPILL}):Play()
+        TweenService:Create(pill, info, {
+            BackgroundColor3 = on and ACCENT or Color3.fromRGB(110, 112, 140),
+            BackgroundTransparency = on and 0.05 or 0.4,
+        }):Play()
         TweenService:Create(knob, info, {
-            Position = on and UDim2.new(0, 20, 0.5, -8) or UDim2.new(0, 2, 0.5, -8)
+            Position = on and UDim2.new(0, 20, 0.5, -9) or UDim2.new(0, 2, 0.5, -9)
         }):Play()
     end)
-    return row
 end
 
-sectionLabel("БОЙ", 2)
-makeToggle("Автофарм", "F4", 3, function() return state.autoFarm end, toggleFarm)
-makeToggle("Fast Attack", "F6", 4, function() return state.fastAttack end, toggleFast)
+local function makeSegment(parent, labels, getIdx, onSelect)
+    local row = Instance.new("Frame")
+    row.Size = UDim2.new(1, 0, 0, 36)
+    row.BackgroundTransparency = 1
+    row.LayoutOrder = nextOrder(parent)
+    row.Parent = parent
 
-sectionLabel("ФРУКТЫ", 6)
-makeToggle("ESP фруктов", "F2", 7, function() return state.esp end, toggleESP)
-makeToggle("Полёт к фрукту", "F3", 8, function() return flying end, flyToNearestFruit)
+    local n = #labels
+    local buttons = {}
+    for i = 1, n do
+        local b = Instance.new("TextButton")
+        b.Size = UDim2.new(1 / n, -6, 1, 0)
+        b.Position = UDim2.new((i - 1) / n, 3, 0, 0)
+        b.AutoButtonColor = false
+        b.Text = labels[i]
+        b.Font = Enum.Font.GothamMedium
+        b.TextSize = 13
+        b.TextColor3 = TEXT
+        b.Parent = row
+        glass(b, 0.9, 0.8)
+        corner(b, UDim.new(0, 10))
+        b.Activated:Connect(function() onSelect(i) end)
+        buttons[i] = b
+    end
 
-sectionLabel("ОРУЖИЕ  (F5)", 9)
+    table.insert(updaters, function()
+        for i, b in ipairs(buttons) do
+            local sel = (i == getIdx())
+            b.BackgroundColor3 = sel and ACCENT or Color3.new(1, 1, 1)
+            b.BackgroundTransparency = sel and 0.15 or 0.9
+        end
+    end)
+end
 
-local weaponRow = Instance.new("Frame")
-weaponRow.Size = UDim2.new(1, 0, 0, 34)
-weaponRow.BackgroundTransparency = 1
-weaponRow.LayoutOrder = 10
-weaponRow.Parent = frame
-
-local weaponLayout = Instance.new("UIListLayout")
-weaponLayout.FillDirection = Enum.FillDirection.Horizontal
-weaponLayout.Padding = UDim.new(0, 6)
-weaponLayout.SortOrder = Enum.SortOrder.LayoutOrder
-weaponLayout.Parent = weaponRow
-
-local weaponButtons = {}
-local weaponLabels = {"Melee", "Sword", "Fruit"}
-for i = 1, 3 do
+local function makeButton(parent, getText, getActive, callback)
     local b = Instance.new("TextButton")
-    b.Size = UDim2.new(1 / 3, -4, 1, 0)
-    b.BackgroundColor3 = CARD
-    b.BorderSizePixel = 0
-    b.Text = weaponLabels[i]
-    b.TextColor3 = TEXT
-    b.Font = Enum.Font.GothamMedium
-    b.TextSize = 13
+    b.Size = UDim2.new(1, 0, 0, 40)
     b.AutoButtonColor = false
-    b.LayoutOrder = i
-    b.Parent = weaponRow
-    corner(b, UDim.new(0, 8))
-    b.Activated:Connect(function() setWeapon(i) end)
-    weaponButtons[i] = b
+    b.Font = Enum.Font.GothamBold
+    b.TextSize = 14
+    b.TextColor3 = Color3.new(1, 1, 1)
+    b.LayoutOrder = nextOrder(parent)
+    b.Parent = parent
+    glass(b, 0.9, 0.7)
+    corner(b, UDim.new(0, 12))
+    b.Activated:Connect(callback)
+
+    table.insert(updaters, function()
+        b.Text = getText()
+        local on = getActive()
+        b.BackgroundColor3 = on and GOOD or ACCENT
+        b.BackgroundTransparency = on and 0.25 or 0.35
+    end)
 end
 
--- Строка статуса
+local function makeInfo(parent)
+    local l = Instance.new("TextLabel")
+    l.Size = UDim2.new(1, 0, 0, 20)
+    l.BackgroundTransparency = 1
+    l.TextColor3 = MUTED
+    l.Font = Enum.Font.Gotham
+    l.TextSize = 12
+    l.TextXAlignment = Enum.TextXAlignment.Left
+    l.TextTruncate = Enum.TextTruncate.AtEnd
+    l.Text = ""
+    l.LayoutOrder = nextOrder(parent)
+    l.Parent = parent
+    return l
+end
+
+-- ===== Вкладка Combat =====
+sectionLabel(combatPage, "ФАРМ")
+makeToggle(combatPage, "Автофарм", "F4", function() return state.autoFarm end, toggleFarm)
+makeToggle(combatPage, "Fast Attack", "F6", function() return state.fastAttack end, toggleFast)
+sectionLabel(combatPage, "ОРУЖИЕ  (F5 - сменить)")
+makeSegment(combatPage, {"Melee", "Sword", "Fruit"}, function() return weaponIndex end, setWeapon)
+
+-- ===== Вкладка Visuals =====
+sectionLabel(visualsPage, "ESP")
+makeToggle(visualsPage, "ESP Fruits", "F2", function() return state.espFruits end, toggleFruitESP)
+makeToggle(visualsPage, "ESP Players", "", function() return state.espPlayers end, togglePlayerESP)
+
+-- ===== Вкладка Misc =====
+sectionLabel(miscPage, "АВТО")
+makeToggle(miscPage, "Auto Factory Core", "", function() return state.autoFactory end, toggleFactory)
+makeToggle(miscPage, "Auto Gacha (ролл фрукта)", "", function() return state.autoGacha end, toggleGacha)
+local gachaInfo = makeInfo(miscPage)
+
+sectionLabel(miscPage, "СТАТЫ  (куда качать)")
+makeSegment(miscPage, STAT_LABELS, function() return statIndex end, setStat)
+makeButton(miscPage,
+    function() return state.autoStats and "Остановить прокачку" or "Начать прокачку" end,
+    function() return state.autoStats end,
+    toggleStats)
+local statsInfo = makeInfo(miscPage)
+
+sectionLabel(miscPage, "ПРОЧЕЕ")
+makeToggle(miscPage, "Полёт к фрукту", "F3", function() return flying end, flyToNearestFruit)
+makeToggle(miscPage, "Blur фона (стекло)", "", function() return state.blur end, toggleBlur)
+
+-- ===== Строка статуса =====
 local statusRow = Instance.new("Frame")
-statusRow.Size = UDim2.new(1, 0, 0, 34)
-statusRow.BackgroundColor3 = CARD
-statusRow.BorderSizePixel = 0
-statusRow.LayoutOrder = 11
-statusRow.Parent = frame
-corner(statusRow, UDim.new(0, 8))
+statusRow.Position = UDim2.new(0, CONTENT_X, 1, -14 - 26)
+statusRow.Size = UDim2.new(0, CONTENT_W, 0, 26)
+statusRow.Parent = main
+glass(statusRow, 0.88, 0.75)
+corner(statusRow, UDim.new(0, 13))
 
 local dot = Instance.new("Frame")
 dot.Size = UDim2.new(0, 8, 0, 8)
@@ -1043,19 +1497,16 @@ status.Text = ""
 status.Parent = statusRow
 
 refreshGui = function()
-    for _, update in ipairs(rows) do update() end
-    for i, b in ipairs(weaponButtons) do
-        b.BackgroundColor3 = (i == weaponIndex) and ACCENT or CARD
-    end
-    dot.BackgroundColor3 = state.autoFarm and GOOD or MUTED
+    for _, update in ipairs(updaters) do update() end
+    dot.BackgroundColor3 = (state.autoFarm or state.autoFactory) and GOOD or MUTED
 end
-refreshGui()
 
--- Кружок VH: появляется при скрытии окна, двигается, по клику открывает GUI
+-- ===== Кружок VH (когда меню скрыто) =====
 local circle = Instance.new("TextButton")
-circle.Size = UDim2.new(0, 50, 0, 50)
-circle.Position = frame.Position
+circle.Size = UDim2.new(0, 52, 0, 52)
+circle.Position = main.Position
 circle.BackgroundColor3 = Color3.new(1, 1, 1)
+circle.BackgroundTransparency = 0.15
 circle.BorderSizePixel = 0
 circle.Text = "VH"
 circle.TextColor3 = Color3.new(1, 1, 1)
@@ -1071,62 +1522,64 @@ brandGradient(circle).Rotation = 45
 local circleStroke = Instance.new("UIStroke")
 circleStroke.Color = Color3.new(1, 1, 1)
 circleStroke.Thickness = 1.5
-circleStroke.Transparency = 0.6
+circleStroke.Transparency = 0.5
 circleStroke.Parent = circle
 
 local function setGuiVisible(v)
     if v then
-        frame.Position = circle.Position -- окно открывается там, где стоит кружок
+        main.Position = circle.Position
     else
-        circle.Position = frame.Position -- кружок появляется там, где было окно
+        circle.Position = main.Position
     end
-    frame.Visible = v
+    main.Visible = v
     circle.Visible = not v
+    applyBlur()
 end
 
 makeDraggable(circle, circle, function() setGuiVisible(true) end)
 
 local function killAll()
     alive = false
-    state.autoFarm, state.fastAttack, state.esp = false, false, false
+    state.autoFarm, state.fastAttack = false, false
+    state.espFruits, state.espPlayers = false, false
+    state.autoFactory, state.autoStats, state.autoGacha = false, false, false
     stopFlying()
     stopFarmPhysics()
-    clearESP()
+    clearFruitESP()
+    clearPlayerESP()
     for _, c in ipairs(connections) do pcall(function() c:Disconnect() end) end
+    pcall(function() blur:Destroy() end)
     gui:Destroy()
     notify("VitaHub остановлен, GUI удалён")
 end
 
--- Нижние кнопки: Скрыть и Убить
-local bottom = Instance.new("Frame")
-bottom.Size = UDim2.new(1, 0, 0, 34)
-bottom.BackgroundTransparency = 1
-bottom.LayoutOrder = 12
-bottom.Parent = frame
+windowButton("-", -76, nil, function() setGuiVisible(false) end)
+windowButton("X", -40, RED, killAll)
 
-local function bottomButton(text, x, color, callback)
-    local b = Instance.new("TextButton")
-    b.Size = UDim2.new(0.5, -3, 1, 0)
-    b.Position = UDim2.new(x, x == 0 and 0 or 3, 0, 0)
-    b.BackgroundColor3 = color
-    b.BorderSizePixel = 0
-    b.Text = text
-    b.TextColor3 = Color3.new(1, 1, 1)
-    b.Font = Enum.Font.GothamBold
-    b.TextSize = 13
-    b.AutoButtonColor = true
-    b.Parent = bottom
-    corner(b, UDim.new(0, 8))
-    b.Activated:Connect(callback)
-    return b
-end
+-- ===== Фоновые обновления интерфейса =====
+task.spawn(function()
+    while alive do
+        local lvl = getPlayerLevel()
+        lvlLabel.Text = "Твой Лвл : " .. lvl
+        nextLabel.Text = "Следующий Остров : " .. nextIslandText(lvl)
+        statsInfo.Text = ("Свободных очков: %d  |  Качаю: %s"):format(getPoints(), STAT_LABELS[statIndex])
+        gachaInfo.Text = "Ответ сервера: " .. gachaStatus
+        status.Text = statusText
+        task.wait(0.5)
+    end
+end)
 
-bottomButton("Скрыть GUI", 0, CARD, function() setGuiVisible(false) end)
-bottomButton("Убить GUI", 0.5, RED, killAll)
+-- ESP-циклы
+task.spawn(function()
+    while alive do
+        if state.espFruits then updateFruitESP() end
+        task.wait(2)
+    end
+end)
 
 task.spawn(function()
     while alive do
-        status.Text = statusText
+        if state.espPlayers then pcall(updatePlayerESP) end
         task.wait(0.5)
     end
 end)
@@ -1136,13 +1589,15 @@ track(UIS.InputBegan:Connect(function(input, processed)
     if processed then return end
     local k = input.KeyCode
 
-    if k == Enum.KeyCode.F2 then toggleESP()
+    if k == Enum.KeyCode.F2 then toggleFruitESP()
     elseif k == Enum.KeyCode.F3 then flyToNearestFruit()
     elseif k == Enum.KeyCode.F4 then toggleFarm()
     elseif k == Enum.KeyCode.F5 then setWeapon(weaponIndex % #WEAPONS + 1)
     elseif k == Enum.KeyCode.F6 then toggleFast()
-    elseif k == Enum.KeyCode.RightShift then setGuiVisible(not frame.Visible)
+    elseif k == Enum.KeyCode.RightShift then setGuiVisible(not main.Visible)
     end
 end))
 
-notify("VitaHub загружен. RightShift или «Скрыть GUI» — спрятать меню")
+setTab("Combat")
+applyBlur()
+notify("VitaHub v5 загружен. RightShift - скрыть меню")
