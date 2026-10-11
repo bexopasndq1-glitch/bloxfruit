@@ -1,8 +1,3 @@
--- VitaHub | Blox Fruits (v1.0) - Russian / English (запускать через executor)
--- Вкладки: Combat / Visuals / Misc
--- F2 ESP фруктов | F3 полёт к фрукту | F4 автофарм | F5 смена оружия | F6 fast attack
--- RightShift скрыть/показать GUI
-
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UIS = game:GetService("UserInputService")
