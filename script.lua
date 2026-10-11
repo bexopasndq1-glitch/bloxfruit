@@ -1,4 +1,4 @@
--- VitaHub | Blox Fruits (v5.6) - Russian / English (запускать через executor)
+-- VitaHub | Blox Fruits (v5.8) - Russian / English (запускать через executor)
 -- Вкладки: Combat / Visuals / Misc
 -- F2 ESP фруктов | F3 полёт к фрукту | F4 автофарм | F5 смена оружия | F6 fast attack
 -- RightShift скрыть/показать GUI
@@ -15,11 +15,13 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local player = Players.LocalPlayer
 
 -- ===== Настройки =====
-local FLY_SPEED = 250        -- скорость полёта (студов/сек), меньше = безопаснее
+local FLY_SPEEDS = {90, 130, 170, 220}  -- варианты скорости полёта, студов/сек (выбор в Misc)
+local flySpeedIndex = 2
+local FLY_SPEED = FLY_SPEEDS[flySpeedIndex]  -- меньше = безопаснее для античита
 local FARM_HEIGHTS = {20, 30, 45, 60}   -- варианты высоты фарма (выбор в Combat)
 local farmHeightIndex = 2
 local FARM_HEIGHT = FARM_HEIGHTS[farmHeightIndex]      -- высота зависания над мобом
-local CRUISE_HEIGHTS = {80, 150, 250}     -- варианты высоты перелёта (выбор в Misc)
+local CRUISE_HEIGHTS = {50, 90, 150}     -- варианты высоты перелёта (выбор в Misc)
 local cruiseIndex = 2
 local CRUISE_HEIGHT = CRUISE_HEIGHTS[cruiseIndex]      -- на сколько выше всего летим при перелёте
 local FARM_APPROACH = 80     -- дальше этого расстояния сначала подлетаем
@@ -203,8 +205,11 @@ local I18N = {
         gacha_lvl = "нужен 50+ уровень (у тебя %d)",
         gacha_beli = "не хватает Beli: нужно ~%d, есть %d",
         gacha_ok = "фрукт получен! следующий ролл через 2 ч",
-        gacha_fail = "ролл не удался (ответ: %s), повтор позже",
+        gacha_fail = "ролл не удался (ответ: %s). Возможно, идёт откат 2 ч",
+        gacha_fly = "Лечу к NPC гачи...",
+        gacha_msg = "игра пишет: %s",
         gacha_next = "  |  след. ролл: %s",
+        sec_speed = "СКОРОСТЬ ПОЛЁТА (меньше = безопаснее)",
         sec_farm = "ФАРМ",
         tg_autofarm = "Автофарм",
         sec_weapon = "ОРУЖИЕ  (F5 - сменить)",
@@ -271,8 +276,11 @@ local I18N = {
         gacha_lvl = "need level 50+ (you have %d)",
         gacha_beli = "not enough Beli: need ~%d, have %d",
         gacha_ok = "fruit rolled! next roll in 2 h",
-        gacha_fail = "roll failed (reply: %s), retrying later",
+        gacha_fail = "roll failed (reply: %s). Maybe the 2h cooldown is active",
+        gacha_fly = "Flying to the gacha NPC...",
+        gacha_msg = "game says: %s",
         gacha_next = "  |  next roll: %s",
+        sec_speed = "FLIGHT SPEED (lower = safer)",
         sec_farm = "FARM",
         tg_autofarm = "Auto Farm",
         sec_weapon = "WEAPON  (F5 - switch)",
@@ -1613,6 +1621,87 @@ local function describeReply(res)
     return type(res) .. ":" .. tostring(res)
 end
 
+-- NPC гачи (Zioles): ищем в Workspace.NPCs по имени
+local function findGachaNpc()
+    local folder = Workspace:FindFirstChild("NPCs")
+    if not folder then return nil end
+    for _, n in ipairs(folder:GetChildren()) do
+        local nm = n.Name:lower()
+        if nm:find("gacha") or nm:find("zioles") or nm:find("cousin") then
+            local part
+            if n:IsA("Model") then
+                part = n.PrimaryPart or n:FindFirstChild("HumanoidRootPart")
+            elseif n:IsA("BasePart") then
+                part = n
+            end
+            if part then return part end
+        end
+    end
+    return nil
+end
+
+-- Выполняет fn() и собирает новые тексты, появившиеся в интерфейсе игры
+-- (там обычно пишут причину отказа, например про откат).
+local function captureMessages(fn)
+    local msgs = {}
+    local pg = player:FindFirstChild("PlayerGui")
+    local conn
+    if pg then
+        conn = pg.DescendantAdded:Connect(function(d)
+            if d:IsA("TextLabel") or d:IsA("TextButton") then
+                task.delay(0.15, function()
+                    local ok, txt = pcall(function() return d.Text end)
+                    if ok and type(txt) == "string" then
+                        txt = (txt:gsub("<[^>]+>", ""))
+                        if #txt > 2 and #msgs < 4 and not d:FindFirstAncestor("VitaHubGui") then
+                            msgs[#msgs + 1] = txt
+                        end
+                    end
+                end)
+            end
+        end)
+    end
+
+    local ok, res = pcall(fn)
+    task.wait(1.5)
+    if conn then conn:Disconnect() end
+    return ok, res, msgs
+end
+
+-- Одна покупка. Возвращает: успех, ответ сервера, сообщения игры, была ли ошибка вызова
+local function buyOnce(comm, cost)
+    local before = snapshotFruitTools()
+    local beliBefore = getBeli()
+
+    local ok, res, msgs = captureMessages(function()
+        return comm:InvokeServer("Cousin", "Buy")
+    end)
+    if not ok then return false, nil, msgs, true end
+    print("[VitaHub] gacha reply: " .. describeReply(res) .. (#msgs > 0 and (" | game: " .. table.concat(msgs, " / ")) or ""))
+
+    -- успех: ответ 1/true, новый фрукт в рюкзаке или списание Beli
+    local function purchased()
+        for tool in pairs(snapshotFruitTools()) do
+            if not before[tool] then return true end
+        end
+        local now = getBeli()
+        if beliBefore and now and now <= beliBefore - cost * 0.4 then return true end
+        return false
+    end
+
+    local success = (res == 1 or res == true) or purchased()
+    if not success then
+        for _, d in ipairs({ 0.5, 1.5 }) do
+            task.wait(d)
+            if purchased() then
+                success = true
+                break
+            end
+        end
+    end
+    return success, res, msgs, false
+end
+
 -- Одна попытка ролла. Возвращает, через сколько секунд пробовать снова.
 local function rollGacha()
     local lvl = getPlayerLevel()
@@ -1634,31 +1723,29 @@ local function rollGacha()
         return 30
     end
 
-    local before = snapshotFruitTools()
-    local ok, res = pcall(function() return comm:InvokeServer("Cousin", "Buy") end)
-    if not ok then
+    local success, res, msgs, errored = buyOnce(comm, cost)
+    if errored then
         gachaStatus = T("call_error")
         return 30
     end
-    print("[VitaHub] gacha reply: " .. describeReply(res))
 
-    -- успех: ответ 1/true, новый фрукт в рюкзаке или списание Beli
-    local function purchased()
-        for tool in pairs(snapshotFruitTools()) do
-            if not before[tool] then return true end
-        end
-        local now = getBeli()
-        if beli and now and now <= beli - cost * 0.4 then return true end
-        return false
-    end
-
-    local success = (res == 1 or res == true)
-    if not success then
-        for _, d in ipairs({ 0.5, 1.5, 2 }) do
-            task.wait(d)
-            if purchased() then
-                success = true
-                break
+    -- ни ответа, ни сообщений: возможно, сервер требует стоять рядом с NPC
+    if not success and res == nil and #msgs == 0 then
+        local npc = findGachaNpc()
+        local busy = state.autoFarm or state.autoFactory or state.autoMaterials or flying
+        local root = getRoot()
+        if npc and root and not busy and (root.Position - npc.Position).Magnitude > 30 then
+            gachaStatus = T("gacha_fly")
+            local arrived = flyToPos(npc.Position + Vector3.new(0, 4, 0), function()
+                return not (alive and state.autoGacha)
+            end)
+            if arrived then
+                success, res, msgs, errored = buyOnce(comm, cost)
+            end
+            stopFarmPhysics()
+            if errored then
+                gachaStatus = T("call_error")
+                return 30
             end
         end
     end
@@ -1670,8 +1757,10 @@ local function rollGacha()
         return GACHA_COOLDOWN
     end
 
-    -- не вышло: показываем ответ сервера и ждём с нарастающей паузой (без спама)
-    if type(res) == "string" and res ~= "" then
+    -- не вышло: показываем, что ответили сервер/игра, и ждём с нарастающей паузой
+    if #msgs > 0 then
+        gachaStatus = T("gacha_msg", table.concat(msgs, " / "))
+    elseif type(res) == "string" and res ~= "" then
         gachaStatus = res
     else
         gachaStatus = T("gacha_fail", describeReply(res))
@@ -1865,6 +1954,12 @@ local function setCruiseHeight(i)
     refreshGui()
 end
 
+local function setFlySpeed(i)
+    flySpeedIndex = i
+    FLY_SPEED = FLY_SPEEDS[i]
+    refreshGui()
+end
+
 -- ================= GUI: Liquid Glass =================
 local gui = Instance.new("ScreenGui")
 gui.Name = "VitaHubGui"
@@ -2029,7 +2124,7 @@ local subLbl = Instance.new("TextLabel")
 subLbl.Position = UDim2.new(0, 20, 0, 36)
 subLbl.Size = UDim2.new(0, 220, 0, 14)
 subLbl.BackgroundTransparency = 1
-subLbl.Text = "Blox Fruits  •  v5.6"
+subLbl.Text = "Blox Fruits  •  v5.8"
 subLbl.TextColor3 = MUTED
 subLbl.Font = Enum.Font.Gotham
 subLbl.TextSize = 12
@@ -2374,7 +2469,9 @@ makeButton(miscPage,
 local statsInfo = makeInfo(miscPage)
 
 sectionLabel(miscPage, T("sec_cruise"))
-makeSegment(miscPage, {"80", "150", "250"}, function() return cruiseIndex end, setCruiseHeight)
+makeSegment(miscPage, {"50", "90", "150"}, function() return cruiseIndex end, setCruiseHeight)
+sectionLabel(miscPage, T("sec_speed"))
+makeSegment(miscPage, {"90", "130", "170", "220"}, function() return flySpeedIndex end, setFlySpeed)
 
 sectionLabel(miscPage, T("sec_misc"))
 makeToggle(miscPage, T("tg_flyfruit"), "F3", function() return flying end, flyToNearestFruit)
